@@ -13,11 +13,49 @@ an agent read, understood, or completed a request.
 pip install tabc
 ```
 
+Installing from TestPyPI is a different command, and the dependency comes from
+the main index:
+
+```bash
+pip install --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ tabc
+```
+
 ## Requirements
 
-Python 3.9 or later is declared. Current installation checks use Python 3.11.6
-on macOS. Other Python versions and operating systems require separate checks.
+Python 3.9 or later is declared. Installation has been exercised on CPython
+3.11 and 3.13, on macOS. Other versions and operating systems are untested.
 `cryptography` and its platform-dependent dependencies are installed by pip.
+
+## A first round trip
+
+Two shells. If this works, the installation is sound.
+
+```bash
+# shell 1 — start the server, register yourself
+tabd &
+tabc register --node alice --kind generic
+
+# shell 2 — register before anything is sent here
+tabc register --node bob --kind generic
+
+# shell 1 — send
+tabc send --sender alice --to bob --subject "hello" --body "first"
+
+# shell 2 — read it, then record that you did
+tabc pull --node bob --mode full
+tabc ack  --node bob --id <full-uuid> --state READ
+
+# shell 1 — the point: bob: READ
+tabc sent --node alice
+```
+
+The last line is what matters. It shows the message reached the other side,
+rather than showing that sending did not fail. `--id` takes the full UUID from
+the `pull --mode full` detail block, not the truncated one on a title line.
+
+Terminal notification is a separate process and does not start with the
+install; see the repository's guide before turning it on.
 
 ## Commands
 
@@ -31,8 +69,7 @@ on macOS. Other Python versions and operating systems require separate checks.
 Register each recipient before sending. tac creators must also join their topic.
 Run `tabc --help` for available commands. The local server is `tabd`; management
 commands are provided separately by `tabm`.
-Setup and troubleshooting guides are maintained in the source repository.
-Its public download address must be verified before publication.
+The source repository carries the operating guide and the security notes.
 
 Release packages include only the English message catalog. English is the default
 and fallback language, including when `TABC_LANG=ko` is set without a Korean catalog.
@@ -40,8 +77,13 @@ and fallback language, including when `TABC_LANG=ko` is set without a Korean cat
 ## Local operation and limitations
 
 Run one `tabd` for a shared store. Its default address is `127.0.0.1:8765`.
-That address is a default, not a fixture: start the daemon with `tabd --bind
-<address> --port <port>`, and point clients at it with `TABC_BUS_URL`.
+That address is a default, not a fixture:
+
+```bash
+tabd --bind <address> --port <port>     # the daemon
+export TABC_BUS_URL=http://<address>:<port>   # the clients
+```
+
 Keep the store, keys, and server address consistent across participating terminals.
 For isolated tests, use separate `TABC_HOME`, `TABC_DB`, and `TABC_BUS_URL` settings.
 
@@ -55,5 +97,6 @@ Automatic Enter does not guarantee a reply.
 
 Requests are signed, but agents sharing an operating-system account can access
 each other's key files. Messages are not encrypted at rest. Use only within a
-trusted local workspace. Public release, supported environments, and notification
-safety require separate approval and verification.
+trusted local workspace. Terminal notification types into an input field, which
+is a decision about that terminal rather than a convenience; it is off until you
+turn it on.
