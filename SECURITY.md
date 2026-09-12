@@ -1,8 +1,5 @@
 # tabus security
 
-> The English text is canonical. The translation can lag behind it, so where
-> the two differ, this one is what holds.
-
 > **Status: prototype.** The grades below are where this stands today, not
 > where it is headed.
 
