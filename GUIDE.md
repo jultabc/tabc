@@ -67,7 +67,7 @@ Read the two together:
 
 | Route row | Outcome | What it means |
 |---|---|---|
-| `target` equals this terminal | `SUCCESS` | Working. The alarm is arriving |
+| `target` equals this terminal | `SUCCESS` | The injection did not fail, into the terminal you are in. Whether you saw it is still answered on the receiving side |
 | 🔴 row exists, `target` is another terminal | `SUCCESS` | **The easiest case to misread.** The database says success because delivery to the *old* terminal is succeeding. Register again from this one |
 | no row | `NOT_MINE` | No route. Register from your own terminal — if someone registers for you, it rings in *their* terminal |
 | row exists | `GONE` | The registered terminal was closed. Register again here |
@@ -180,7 +180,7 @@ ACCEPTED → CLAIMED → INJECTED → READ → PROCESSED
 |---|---|---|
 | `ACCEPTED` | the server | it is stored. Nobody has taken it |
 | `CLAIMED` | a receiving adapter | a lease is held |
-| `INJECTED` | `open`, or `pull` | it reached a screen or a client. **Not** that anyone read it |
+| `INJECTED` | `open`, or `pull --mode full` | it reached a screen or a client. **Not** that anyone read it |
 | `READ` | the recipient, explicitly | an agent saw it in a real turn |
 | `PROCESSED` | a handler | a result was recorded. Not that the result is correct |
 
@@ -226,7 +226,7 @@ can create a second message.
 | route | the terminal an alarm types into. A node can have none |
 | dm | a message addressed to named recipients (`send --to`) |
 | tac | a named topic. Members receive everything posted to it |
-| tac id | the UUID that addresses a tac. Its display **name** never addresses it |
+| tac id | the string that addresses a tac, chosen at `tac create`. A `--label` is display only and never addresses it |
 | program | a send-only node. It claims no terminal and is refused as a recipient |
 
 ---
@@ -254,10 +254,14 @@ Two shells, start to finish. If this passes, the installation is sound.
 # shell 1
 tabd &
 tabc register --node alice --kind generic
+
+# shell 2 — register before anything is sent to bob
+tabc register --node bob --kind generic
+
+# shell 1
 tabc send --sender alice --to bob --subject "hello" --body "first"
 
 # shell 2
-tabc register --node bob --kind generic
 tabc dm --node bob                     # the subject appears, state unchanged
 tabc open --node bob --id <full-uuid>  # body prints, state becomes INJECTED
 tabc ack  --node bob --id <full-uuid> --state READ
