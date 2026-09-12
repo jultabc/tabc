@@ -36,3 +36,8 @@ venv/
 # Editable install leaves this behind; `pip install -e .` is the documented
 # first step, so every contributor produces one.
 *.egg-info/
+
+# Build output. `python -m build` writes both, and a wheel committed once is a
+# stale copy of the source forever after.
+build/
+dist/
