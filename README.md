@@ -1,5 +1,7 @@
 # tabc
 
+<img src="docs/logo.png" alt="tabc" width="320">
+
 [![CI](https://github.com/jultabc/tabc/actions/workflows/ci.yml/badge.svg)](https://github.com/jultabc/tabc/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/tabc.svg)](https://pypi.org/project/tabc/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
