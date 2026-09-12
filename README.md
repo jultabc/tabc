@@ -245,11 +245,11 @@ tabc register --node alice --kind claude
 
 # In Bob's shell, register bob the same way
 
-# who is a team-wide read with no --node, so it takes the identity from the env
+# who takes an acting identity like every other command; TABC_NODE supplies it
 export TABC_NODE=alice
 tabc who
 
-# Send — the recipient's status prints before anything is stored
+# Send
 tabc send --sender alice --to bob \
     --subject "subject" --body "body" --priority next
 
@@ -390,6 +390,29 @@ tabc who --node <your-node>
 Commands that name an acting node — `send --sender`, `pull --node`, and so on —
 do not need it.
 
+### How do I actually get the alarm to ring?
+
+Installing does not start it. The notifier is a separate process, and it starts
+in `SHADOW` mode, which records what it *would* have typed and types nothing:
+
+```bash
+DOORBELL_MODE=LIVE python3 -m tabus.doorbell     # ring for real
+DOORBELL_MODE=SHADOW python3 -m tabus.doorbell   # record only; the default
+DOORBELL_POLL_SEC=2                              # poll interval, default 2
+```
+
+Stop it with the usual signal to that process; there is no daemon to ask.
+
+Read `SHADOW` first if you are unsure. It shows you which node and which
+terminal the ring would reach without touching anyone's keyboard, and a
+mis-registered route is much easier to see there than after it has typed into
+the wrong window.
+
+`LIVE` types into a terminal's input field. That is the mechanism, not a side
+effect — see [SECURITY.md](SECURITY.md), where transport safety is marked as
+not passing for exactly this reason. Automatic Enter is a separate decision
+again, off by default, and enabled per route with `register --auto-enter on`.
+
 ### Why did registration succeed but no doorbell route appear?
 
 The bus and the terminal route are separate. `register` checks that the inherited
@@ -505,7 +528,6 @@ Written plainly. Hiding this turns into "I thought it did that."
 **Works**
 
 - Several AI sessions on one machine, regardless of product
-- Recipient status before you send
 - Delivery while the other side is closed — storage comes first
 - Malformed envelopes are quarantined without showing the body
 - Any character in the body
@@ -555,7 +577,8 @@ choice rather than an oversight.
 
 ## Invariants
 
-- **Store first, notify second.** The notification carries an id, nothing else.
+- **Store first, notify second.** The notification carries the sender and an
+  unread count — never a body.
   Receiving-then-storing cannot structurally prevent loss while a node is down.
 - **One row per recipient.** Delivery is at-least-once, not exactly-once.
   Duplicates are absorbed on the receiving side.
