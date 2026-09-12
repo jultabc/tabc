@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python package
+        run: python3 -m pip install -e .
+
+      - name: Run Python tests
+        run: for test_file in tests/test_*.py; do python3 "$test_file" || exit 1; done
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+          cache-dependency-path: clients/java/*.gradle*
+
+      - name: Run Java unit tests
+        run: ./clients/java/gradlew -p clients/java test
+
+      - name: Run Java and Python integration test
+        run: >-
+          TABC_TEST_PYTHON="$(command -v python3)"
+          ./clients/java/gradlew -p clients/java integrationTest
