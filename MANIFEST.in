@@ -1,0 +1,5 @@
+include PYPI.md LICENSE
+exclude tabus/locales/ko.json
+exclude README.md
+prune tests
+prune scripts

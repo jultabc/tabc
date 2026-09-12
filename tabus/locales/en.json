@@ -1,0 +1,8 @@
+{
+    "doorbell.ring_tac": "[tac] {tac} · {unread} unread · from: {who}",
+    "doorbell.ring": "[dm] {unread} unread · from: {who}",
+    "doorbell.ring_no_who": "[dm/tac] {unread} unread · from: not tallied yet (timing gap) - next ring will catch it",
+    "doorbell.ring_who_error": "[dm/tac] {unread} unread · from: lookup failed (could not read ledger) - see where tabus.doorbell is running",
+    "who.unverified": "[unverified]",
+    "who.signed": "[signed]"
+}
