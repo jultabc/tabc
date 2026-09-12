@@ -62,8 +62,12 @@ DB_PATH = os.environ.get(
 #    envelope does, which is how old and new nodes decide whether they can talk.
 #    Never merge them into one number.
 #    0.x means early: before 1.0.0, SemVer allows a minor bump to break things.
-#    This is the single source. Do not copy the number into documentation.
-__version__ = "0.1.0"
+#    This line is what `tabc --version` prints. It is not the single source:
+#    `pyproject.toml` carries the same number for pip and PyPI, and the two
+#    drifted once already — 0.1.0.post1 shipped while this said 0.1.0. Bump
+#    both together; tests/test_version_agreement.py fails the build otherwise.
+#    Do not copy the number into documentation.
+__version__ = "0.1.1"
 PROTOCOL_VERSION = "tabus.v1"
 
 # TTLs. Past these, a derived status counts as old.
