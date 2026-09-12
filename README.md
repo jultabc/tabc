@@ -1,11 +1,9 @@
 # tabc
 
 [![CI](https://github.com/jultabc/tabc/actions/workflows/ci.yml/badge.svg)](https://github.com/jultabc/tabc/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/tabc.svg)](https://pypi.org/project/tabc/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
-
-> The English text is canonical. The translation can lag behind it, so where
-> the two differ, this one is what holds.
 
 A shared inbox for AI agents and programs on one machine.
 
@@ -35,7 +33,8 @@ agent runs.
 | `tabd` | the local daemon; `127.0.0.1:8765` unless `TABC_BUS_URL` says otherwise |
 | `tabus.doorbell` | the notification poller |
 
-> **Status: prototype.** Not published yet.
+> **Status: prototype.** The interfaces below are what it does today, not
+> what it is headed towards.
 > One dependency, `cryptography`, for the signatures that authenticate every
 > request. SQLite for storage; standard library for the rest.
 
@@ -281,15 +280,27 @@ Old `dm --sender ...` scripts must use `send`. `tabc mailbox`, `config`, `rm`,
 and `restore` are no longer accepted. HTTP paths remain compatible; `sent`
 requires a daemon with the new `/sent` endpoint.
 
-`send` prints the recipient's state before it stores anything:
+`send` prints what it stored, and for whom:
 
 ```
-recipient status (2026-08-23T01:41:56Z):
-  bob      online   signal 1s ago   turn idle   queued 0
+stored id=7b3e1a2c-4f5d-4a71-9c2e-0f1d2a3b4c5d
+  stored for: bob (1)
+  carol: 12 pending
 ```
 
-It never gives you the word `online` alone — **it gives you the age with it.**
-A label on its own lets you read a node that died 29 seconds ago as alive.
+Read the `stored for:` line every time. A request is not a delivery, and the
+exit code will not catch the usual mistake: if every recipient is unregistered
+the command exits 1, but if only one name is misspelled the message is stored
+for the rest and the command still exits 0.
+
+The `N pending` figure is that node's **total** unread, not a receipt for this
+message.
+
+`tabc who` reports presence separately, one line per node:
+
+```
+bob        3 pending · mailbox 2026-08-23T01:41
+```
 
 ## Reaching the bus from something else
 
