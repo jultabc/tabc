@@ -1,0 +1,38 @@
+# Secrets. These must never enter the history — once committed they are public
+# even after deletion, so this list is the last gate before `git add`.
+.bus_token
+.node_token
+.node_tokens
+.node_key
+.node_key.*
+user_email
+host_id
+
+# Local state. The store is a file on this machine; it holds real messages.
+*.db
+*.db-wal
+*.db-shm
+*.db.bak*
+*.db-wal.bak*
+*.db-shm.bak*
+
+# Runtime output
+*.out
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+
+# Editable install leaves this behind; `pip install -e .` is the documented
+# first step, so every contributor produces one.
+*.egg-info/
