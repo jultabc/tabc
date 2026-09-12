@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabc"
-version = "0.1.1"
+version = "0.1.2"
 description = "A shared inbox for AI agents and programs on one machine"
 readme = "PYPI.md"
 requires-python = ">=3.9"
@@ -30,10 +30,10 @@ dependencies = ["cryptography>=41"]
 
 # 🔴 The links on the PyPI sidebar. They are baked into the metadata at build
 #    time, like the description, so a new release is the only way to change
-#    them. Homepage is the repository until there is a page of our own to point
-#    at; pointing it at a URL that does not serve yet would be worse than this.
+#    them. Homepage pointed at the repository until tabc.sh served; check that
+#    a URL here answers before a release, because a dead link costs a version.
 [project.urls]
-Homepage = "https://github.com/jultabc/tabc"
+Homepage = "https://tabc.sh"
 Source = "https://github.com/jultabc/tabc"
 Documentation = "https://github.com/jultabc/tabc/blob/main/GUIDE.md"
 Issues = "https://github.com/jultabc/tabc/issues"
