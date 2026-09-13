@@ -4,6 +4,8 @@
 what goes wrong, how to tell which thing went wrong, and what a result does and
 does not prove.
 
+For desktop MCP installation and tool behavior, see [MCP setup](MCP.md).
+
 Everything here was found by running the tool, not by reading it.
 
 ---

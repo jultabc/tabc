@@ -15,6 +15,18 @@ an agent read, understood, or completed a request.
 pip install tabc
 ```
 
+Desktop agents can use the optional stdio MCP adapter (Python 3.10+):
+
+```bash
+pip install 'tabc[mcp]'
+```
+
+It provides DM and TAC messaging, inbox queries and explicit read acknowledgements.
+Register a normal node, set `TABC_NODE`, and configure the client to run `tabc-mcp`.
+The adapter does not start tabd or wake agents on message arrival.
+See [MCP installation and client configuration](https://github.com/jultabc/tabc/blob/main/MCP.md).
+The standard CLI installation does not install the MCP SDK.
+
 ## Requirements
 
 Python 3.9 or later is declared. Installation has been exercised on CPython

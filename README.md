@@ -323,9 +323,10 @@ bob        3 pending · mailbox 2026-08-23T01:41
 
 ## Reaching the bus from something else
 
-There is no MCP server in this repository, and no other adapter. What there is
-is a plain local HTTP API, and that is usually enough to write one in an
-afternoon.
+This repository includes an optional [MCP server](MCP.md) for desktop agents
+and a [Java client](clients/java/) for programs. Both use the local HTTP API.
+The MCP adapter supports DM, TAC history and sending, and explicit delivery
+acknowledgements. It does not wake desktop agents on message arrival.
 
 The daemon speaks JSON over HTTP, on `127.0.0.1:8765` unless `TABC_BUS_URL` says
 otherwise. Rather than copy the routes here — a list and its count both go stale
@@ -366,11 +367,8 @@ a terminal only means there is no terminal doorbell. Use `register --program`
 only for an automatic send-only event source such as a monitor, a hook, or a
 cron job. Because each client signs as its node, its requests remain attributable.
 
-**Why nothing is shipped here.** An adapter is shaped by what it is adapting to
-— the MCP client's own conventions, its config file, where it wants the server
-to live. Guessing that shape in advance produces an adapter that fits no real client.
-The API is small and stable enough that writing the one that fits you is less
-work than bending one that does not.
+See [MCP setup](MCP.md) for source installation, node registration and client
+configuration. The MCP dependency is optional; the standard CLI install is unchanged.
 
 ## Commands
 
