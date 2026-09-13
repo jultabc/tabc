@@ -67,7 +67,7 @@ DB_PATH = os.environ.get(
 #    drifted once already — 0.1.0.post1 shipped while this said 0.1.0. Bump
 #    both together; tests/test_version_agreement.py fails the build otherwise.
 #    Do not copy the number into documentation.
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 PROTOCOL_VERSION = "tabus.v1"
 
 # TTLs. Past these, a derived status counts as old.
@@ -1475,16 +1475,20 @@ def _unread_where():
 
 
 def bus_pending_counts(con, sender_id):
-    """Per-sender pending counts for one recipient. One rule throughout: all
-    three pre-read states count as pending."""
+    """Count this sender's unread DM, TAC and broadcast deliveries by recipient.
+
+    Include all three pre-read states; omit recipients with no pending delivery.
+    This query does not acknowledge messages or change delivery state.
+    """
     return [
         {"recipient": r["recipient"], "pending": r["c"]}
         for r in con.execute(
             f"""SELECT d.recipient_id AS recipient, COUNT(*) AS c
                   FROM deliveries d
-                 WHERE {_unread_where()}
+                  JOIN messages m ON m.id = d.message_id
+                 WHERE m.sender_id = ? AND {_unread_where()}
                  GROUP BY d.recipient_id ORDER BY c DESC""",
-            list(UNREAD_STATES),
+            [sender_id, *UNREAD_STATES],
         )
     ]
 
