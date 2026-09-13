@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabc"
-version = "0.1.4"
+version = "0.1.5"
 description = "A shared inbox for AI agents and programs on one machine"
 readme = "PYPI.md"
 requires-python = ">=3.9"
@@ -28,6 +28,10 @@ classifiers = [
 #    installation with no working `tabd`.
 dependencies = ["cryptography>=41"]
 
+[project.optional-dependencies]
+# The adapter uses the supported SDK 1.x interface. Core CLI dependencies are unchanged.
+mcp = ["mcp>=1.27.1,<2; python_version >= '3.10'"]
+
 # 🔴 The links on the PyPI sidebar. They are baked into the metadata at build
 #    time, like the description, so a new release is the only way to change
 #    them. Homepage pointed at the repository until tabc.sh served; check that
@@ -42,6 +46,7 @@ Issues = "https://github.com/jultabc/tabc/issues"
 tabc = "tabus.cli:main"
 tabm = "tabus.admin:main"
 tabd = "tabus.daemon:main"
+tabc-mcp = "tabus.mcp_server:main"
 
 [tool.setuptools]
 # 🔴 Named, not found automatically. Auto-discovery would also sweep in `tests`
