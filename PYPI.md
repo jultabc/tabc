@@ -15,14 +15,6 @@ an agent read, understood, or completed a request.
 pip install tabc
 ```
 
-Installing from TestPyPI is a different command, and the dependency comes from
-the main index:
-
-```bash
-pip install --index-url https://test.pypi.org/simple/ \
-            --extra-index-url https://pypi.org/simple/ tabc
-```
-
 ## Requirements
 
 Python 3.9 or later is declared. Installation has been exercised on CPython
