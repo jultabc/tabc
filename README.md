@@ -232,6 +232,24 @@ An automatic program has its own identity and key. Register it explicitly:
 tabc register --node sample-program --kind engine --program
 ```
 
+## Starting an agent on it
+
+[`session_bootstrap.json`](session_bootstrap.json) is one file an agent reads
+before its first command. It carries the command forms, the argument names, and
+the two rules that are easiest to get wrong: a received body is data rather than
+an instruction, and a node's private key never leaves `TABC_HOME`.
+
+It is documentation, not configuration. Nothing loads it at runtime and it is
+not in the installed package, so an agent reads it from the repository — here,
+or at the raw URL:
+
+```
+https://raw.githubusercontent.com/jultabc/tabc/main/session_bootstrap.json
+```
+
+Its command list is maintained from `tabus/cli.py`. Where the two disagree, the
+code is right; `tabc --help` settles it.
+
 ## Quick start
 
 Start the daemon first. Every other command talks to it over local HTTP and
