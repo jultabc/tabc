@@ -202,8 +202,7 @@ The client refuses a routed registration when `tabd` does not echo the requested
 `auto_enter` state, which exposes a mixed-version deployment. Later on/off changes
 are read from the route on every ring and need no restart.
 
-Older versions wrote `~/.tabc/node`; current clients ignore that file. Each
-local installation directory plus node id gets an independently generated
+Each local installation directory plus node id gets an independently generated
 Ed25519 key pair. The private key is a raw 32-byte file at
 `~/.tabc/.node_key.<node-id>`, created with mode `0600` inside the `0700`
 state directory. It is not encrypted at rest. Never commit, log, or transmit it.
@@ -393,8 +392,8 @@ metadata, or entry points.
 
 No. Registration writes the node and its public key to the bus; it cannot change
 the environment of the shell that launched it. Export `TABC_NODE` for commands
-without an acting-node option. The old `~/.tabc/node` default is deliberately
-ignored because concurrent agents would otherwise share one mutable identity.
+without an acting-node option. Each process uses its own node identity rather
+than a shared on-disk default.
 
 ### Does `tabc who` require `TABC_NODE`?
 
