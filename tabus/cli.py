@@ -36,6 +36,12 @@ import uuid
 
 BASE = os.environ.get("TABC_BUS_URL", "http://127.0.0.1:8765")
 
+# 🔴 How much of a message id the listings print. One name, because the two
+#    listings must agree: a reader who learns the shape from one and pastes into
+#    the other should not find a different length. Any prefix resolves, so this
+#    is a readability choice, not a correctness one.
+ID_PREFIX_LEN = 18
+
 def _my_node():
     """Return only the process-scoped node identity.
 
@@ -462,12 +468,12 @@ def _print_titles(msgs):
     if not msgs:
         print("nothing new")
         return 0
-    print(f"[{len(msgs)}]")
+    print(f"[{len(msgs)}] (ids shortened — a prefix is enough for --id)")
     for i, m in enumerate(msgs, 1):
         tag = "↺" if m.get("state") == "INJECTED" else "●"
         print(
             f"  {i}. [{m['priority']}] {m['subject']} "
-            f"(from {m['from']}, {tag}) id={m['id'][:18]}…"
+            f"(from {m['from']}, {tag}) id={m['id'][:ID_PREFIX_LEN]}"
         )
     return len(msgs)
 
@@ -525,11 +531,16 @@ def fn_mailbox(a):
     if not unread:
         print("dm is empty")
         return
-    print(f"{len(unread)} unread:")
+    # 🔴 The id is shortened, and what is printed has to work when pasted back.
+    #    It used to carry a trailing "…", which made the copied text match nothing:
+    #    resolve_recipient_message_id() takes a prefix, and "…" is not one. The
+    #    ellipsis is gone and the shortening is stated once in the header instead,
+    #    so every line stays a usable argument.
+    print(f"{len(unread)} unread (ids shortened — a prefix is enough for --id):")
     for i, t in enumerate(unread, 1):
         print(
             f"  {i}. [{t['state']}] {t['subject']} "
-            f"(from {t['from']}, id={t['message_id'][:18]}…)"
+            f"(from {t['from']}, id={t['message_id'][:ID_PREFIX_LEN]})"
         )
 
 
