@@ -36,10 +36,17 @@ import uuid
 
 BASE = os.environ.get("TABC_BUS_URL", "http://127.0.0.1:8765")
 
-# 🔴 How much of a message id the listings print. One name, because the two
-#    listings must agree: a reader who learns the shape from one and pastes into
-#    the other should not find a different length. Any prefix resolves, so this
-#    is a readability choice, not a correctness one.
+# 🔴 How much of a message id this CLI prints when it shortens one. Every such
+#    place uses this name — the two listings and the three warnings that name an
+#    id the reader is expected to retry. A reader who learns the shape in one
+#    place and pastes it in another must not meet a different length, and no
+#    printed form may carry a character that is not part of an id. Any prefix
+#    resolves, so the length itself is a readability choice; being pasteable is
+#    not. The daemon's own ambiguity message shortens candidates separately.
+#
+#    An earlier fix changed only the two listings and left the warnings at a
+#    literal 18 with a trailing ellipsis, which is the form this name exists to
+#    prevent. test_listed_id_is_pasteable.py now pastes every printed form back.
 ID_PREFIX_LEN = 18
 
 def _my_node():
@@ -511,7 +518,7 @@ def fn_pull(a):
             if c_i != 200 or not r_i.get("ok"):
                 failed.append(m["id"])
                 print(
-                    f"  ⚠ could not record arrival: {str(m['id'])[:18]}… "
+                    f"  ⚠ could not record arrival: {str(m['id'])[:ID_PREFIX_LEN]} "
                     "— it may be redelivered after the lease expires"
                 )
         if failed:
@@ -662,10 +669,10 @@ def fn_read(a):
             node=a.node,
         )
         if oc != 200:
-            print(f"  ⚠ {mid[:18]}… could not open — left unread ({orr.get('error') or orr})")
+            print(f"  ⚠ {mid[:ID_PREFIX_LEN]} could not open — left unread ({orr.get('error') or orr})")
             continue
         if orr.get("quarantined"):
-            print(f"  ⚠ {mid[:18]}… quarantined — body not opened, left unread ({orr['quarantined']})")
+            print(f"  ⚠ {mid[:ID_PREFIX_LEN]} quarantined — body not opened, left unread ({orr['quarantined']})")
             continue
         opened_id = orr.get("id", mid)
         print(
