@@ -1959,8 +1959,8 @@ def bus_send(
         # 🔴 Read before send: unread messages in this tac block sending to it.
         #    Listen before speaking. Everyone sending without reading is what turns
         #    a topic into a flood.
-        #    Unread means ACCEPTED or CLAIMED — not opened. Viewing the tac
-        #    advances the member's unread and lifts the block.
+        #    Unread means ACCEPTED or CLAIMED. Catch-up advances only returned
+        #    deliveries to INJECTED; unreturned deliveries can keep the block.
         _unread = con.execute(
             "SELECT COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
             "WHERE d.recipient_id = ? AND m.tac_id = ? AND d.state IN ('ACCEPTED','CLAIMED')",
@@ -1970,7 +1970,8 @@ def bus_send(
             return (
                 None,
                 f"tac '{tac_id}': {_unread} unread. Read them first"
-                f" (tabc tac show {tac_id}). Listen before speaking.",
+                f" (tabc tac show {tac_id} --node {sender_id}). "
+                f"For older messages, use tabc dm --node {sender_id} and open each message.",
             )
         recipients = [m for m in bus_tac_members(con, tac_id) if m != sender_id]
         if not recipients:
@@ -2463,7 +2464,7 @@ def bus_tac_members(con, tac_id, include_removed=False):
     return [r["member_node_id"] for r in rows]
 
 
-def bus_tac_mark_read(con, node_id, tac_id):
+def bus_tac_mark_read(con, node_id, tac_id, message_ids=None):
     """Record that this node has seen this tac.
 
     Unopened tac deliveries (ACCEPTED or CLAIMED) advance to INJECTED. That is
@@ -2473,13 +2474,23 @@ def bus_tac_mark_read(con, node_id, tac_id):
     🔴 An observer who is not a member has no deliveries in this tac, so the
        rowcount is zero and nothing changes. Supervision stays read-only.
 
+    When message_ids is supplied, only those returned messages may advance.
+    An empty selection changes nothing. This never records READ.
     Returns the number of deliveries marked.
     """
+    scope = ""
+    params = [node_id, tac_id]
+    if message_ids is not None:
+        ids = list(dict.fromkeys(message_ids))
+        if not ids:
+            return 0
+        scope = " AND message_id IN (" + ",".join("?" for _ in ids) + ")"
+        params.extend(ids)
     cur = con.execute(
         "UPDATE deliveries SET state='INJECTED' "
         "WHERE recipient_id = ? AND state IN ('ACCEPTED','CLAIMED') "
-        "AND message_id IN (SELECT id FROM messages WHERE tac_id = ?)",
-        (node_id, tac_id),
+        "AND message_id IN (SELECT id FROM messages WHERE tac_id = ?)" + scope,
+        params,
     )
     con.commit()
     return cur.rowcount

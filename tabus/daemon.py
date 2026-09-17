@@ -370,9 +370,12 @@ class BusHandler(BaseHTTPRequestHandler):
             if catch_up_node and catch_up_node != self._acting():
                 con.close()
                 return self._json(403, {"error": "a node may catch up only itself"})
+            messages = tabus.bus_tac_messages(con, gid, limit=limit)
             marked = 0
             if exists and catch_up_node:
-                marked = tabus.bus_tac_mark_read(con, catch_up_node, gid)
+                marked = tabus.bus_tac_mark_read(
+                    con, catch_up_node, gid, message_ids=[m["id"] for m in messages]
+                )
             crow = con.execute(
                 "SELECT closed_at, close_summary FROM tacs WHERE tac_id=?", (gid,)
             ).fetchone()
@@ -381,7 +384,7 @@ class BusHandler(BaseHTTPRequestHandler):
                 "exists": exists,
                 "marked_read": marked,
                 "members": tabus.bus_tac_members(con, gid),
-                "messages": tabus.bus_tac_messages(con, gid, limit=limit),
+                "messages": messages,
                 "links": tabus.bus_tac_links(con, gid),
                 "closed_at": crow["closed_at"] if crow else None,
                 "close_summary": crow["close_summary"] if crow else None,

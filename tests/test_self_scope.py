@@ -44,7 +44,7 @@ class QuietServer(tabd.ThreadingHTTPServer):
         pass
 
 
-def _signed(port, method, path, node, payload=None):
+def _signed(port, method, path, node, payload=None, response_body=False):
     """A request signed by `node`'s own key. Returns the status code."""
     body = json.dumps(payload, ensure_ascii=False) if payload is not None else ""
     ts = str(int(time.time()))
@@ -60,7 +60,7 @@ def _signed(port, method, path, node, payload=None):
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status
+            return (r.status, json.load(r)) if response_body else r.status
     except urllib.error.HTTPError as e:
         return e.code
 
@@ -168,6 +168,33 @@ try:
         "🔴 a non-member cannot read a tac's contents",
         _signed(port, "GET", "/tac_messages?tac=t1", "bob") == 403,
     )
+
+    # A limited HTTP response must advance exactly its returned delivery IDs.
+    con = tabus.connect()
+    tabus.bus_tac_create(con, "limited", by="alice")
+    for member in ("alice", "bob"):
+        tabus.bus_tac_add(con, "limited", member, by="alice")
+    limited_ids = [
+        tabus.bus_send(con, "alice", [], str(i), "body", tac_id="limited")[0]
+        for i in range(3)
+    ]
+    status, response = _signed(
+        port, "GET", "/tac_messages?tac=limited&node=bob&limit=1", "bob",
+        response_body=True,
+    )
+    returned = [m["id"] for m in response.get("messages", [])]
+    states = dict(con.execute(
+        "SELECT message_id, state FROM deliveries WHERE recipient_id=? "
+        "AND message_id IN (SELECT id FROM messages WHERE tac_id=?)",
+        ("bob", "limited"),
+    ))
+    check(
+        "HTTP limit advances only the returned ID, never READ",
+        status == 200 and returned == [limited_ids[-1]]
+        and response.get("marked_read") == 1
+        and states == {mid: "INJECTED" if mid in returned else "ACCEPTED" for mid in limited_ids},
+    )
+    con.close()
 
     # supervision: /who is allowed for any registered node.
     check("who is allowed for any node (supervision)", _signed(port, "GET", "/who", "alice") == 200)

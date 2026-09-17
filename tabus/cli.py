@@ -818,8 +818,8 @@ def fn_tac(a):
         if not a.tac:
             print("usage: tabc tac show <tac>   (add --node <you> to catch up your unread)")
             sys.exit(1)
-        # 🔴 With --node, this marks that member's unread in the tac as read, which
-        #    lifts the read-before-send block. Without it, viewing changes nothing.
+        # With --node, only returned deliveries advance to INJECTED, not READ.
+        # Unreturned deliveries may still block sending. Without it, no state changes.
         _url = f"{MAPPING['tac_messages']}?tac={a.tac}&limit={a.limit}"
         if a.node:
             _url += f"&node={a.node}"
@@ -841,7 +841,8 @@ def fn_tac(a):
         )
         if r.get("marked_read"):
             print(
-                f"  ✅ caught up on {r['marked_read']} unread — you can send to this tac now"
+                f"  caught up on {r['marked_read']} returned messages (INJECTED, not READ); "
+                "unreturned messages may still block sending"
             )
         if closed and r.get("close_summary"):
             print(f"  closing summary: {r['close_summary']}")
@@ -852,7 +853,7 @@ def fn_tac(a):
             print(f"  continued by: {', '.join(links['children'])}")
         for m in msgs:
             head = f"{m.get('accepted_at', '')[:16]} {m.get('sender_id', '?')}"
-            print(f"  {head}: {m.get('subject', '')}")
+            print(f"  {head}: {m.get('subject', '')} [id={m.get('id', '?')}]")
             for ln in (m.get("body") or "").strip().splitlines():
                 print(f"      {ln}")
         return
@@ -1161,8 +1162,8 @@ COMMANDS = {
                 ("--node",),
                 dict(
                     default=None,
-                    help="your node. For show it catches up your unread in this tac, which lifts the "
-                    "read-before-send block (without it, viewing changes nothing). For create/add/rm/"
+                    help="your node. For show only returned messages advance to INJECTED, not READ; "
+                    "unreturned messages may still block sending (without it, viewing changes nothing). For create/add/rm/"
                     "close/link it is recorded as the actor in the audit",
                 ),
             ),
