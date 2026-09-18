@@ -46,6 +46,13 @@ import json
 import os
 
 from . import paths
+from .send_refusal import (  # the limits stay importable as tabus.MAX_*_BYTES
+    MAX_BODY_BYTES,
+    MAX_SUBJECT_BYTES,
+    check_send_payload,
+    unread_blocked_dm,
+    unread_blocked_tac,
+)
 import platform
 import sqlite3
 import sys
@@ -89,7 +96,7 @@ ACTIVITY_TTL_SEC = 60  # busy/idle older than this reads as unknown
 CLAUDE_SESSIONS_DIR = os.path.expanduser("~/.claude/sessions")
 LEASE_SEC = 120  # a claim older than this becomes eligible for redelivery
 MAX_ATTEMPTS = 5  # past this the delivery is DEAD, so one poison message cannot loop
-MAX_BODY_BYTES = 65536
+# MAX_BODY_BYTES and MAX_SUBJECT_BYTES come from send_refusal, where they are checked.
 
 # 🔴 A display-only label. It assumes the local part equals the node_id, so the
 #   registered name is also the address prefix.
@@ -1904,8 +1911,24 @@ def bus_send(
     tac_id=None,
     broadcast=False,
 ):
-    if body is None or len(body.encode()) > MAX_BODY_BYTES:
-        return None, "body is missing or too large"
+    # 🔴 Payload checks come before any state lookup, so a malformed request learns
+    #    nothing about senders, tacs or unread mail.
+    refusal = check_send_payload(
+        subject,
+        body,
+        {
+            "from": sender_id,
+            "to": recipients,
+            "tac": tac_id,
+            "priority": priority,
+            "message_id": message_id,
+            "reply_to": reply_to,
+            "thread_id": thread_id,
+            "expires_at": expires_at,
+        },
+    )
+    if refusal is not None:
+        return None, refusal
     if expires_at:
         try:
             expires_at = parse_instant(expires_at).isoformat(timespec="seconds")
@@ -1969,9 +1992,13 @@ def bus_send(
         if _unread:
             return (
                 None,
-                f"tac '{tac_id}': {_unread} unread. Read them first"
-                f" (tabc tac show {tac_id} --node {sender_id}). "
-                f"For older messages, use tabc dm --node {sender_id} and open each message.",
+                unread_blocked_tac(
+                    f"tac '{tac_id}': {_unread} unread. Read them first"
+                    f" (tabc tac show {tac_id} --node {sender_id}). "
+                    f"For older messages, use tabc dm --node {sender_id} and open each message.",
+                    tac_id,
+                    _unread,
+                ),
             )
         recipients = [m for m in bus_tac_members(con, tac_id) if m != sender_id]
         if not recipients:
@@ -2031,6 +2058,7 @@ def bus_send(
     # unread state must not stop its one-way event stream.
     if not tac_id and not broadcast and not sender_is_program:
         blocked = []
+        counts = []
         for r in valid:
             n = con.execute(
                 "SELECT COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
@@ -2041,11 +2069,15 @@ def bus_send(
             ).fetchone()["c"]
             if n:
                 blocked.append(f"{r} ({n})")
+                counts.append((r, n))
         if blocked:
             return (
                 None,
-                f"read their messages first: {', '.join(blocked)}. "
-                f"Open them with tabc open, then send. Listen before speaking.",
+                unread_blocked_dm(
+                    f"read their messages first: {', '.join(blocked)}. "
+                    f"Open them with tabc open, then send. Listen before speaking.",
+                    counts,
+                ),
             )
 
     mid = message_id or str(uuid.uuid4())

@@ -19,11 +19,13 @@ shared secret — see _authorized.
 
 import json
 import os
+import socket
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import nodekey  # base58 signature decoding, for verifying /send
+from .send_refusal import declared_length, request_length_refusal
 from . import bus as tabus  # the store; kept under its old name so call sites read the same
 
 HOLD_SEC = 25  # longest a long-poll waits
@@ -32,6 +34,20 @@ POLL_TICK = 0.5  # how often a waiting long-poll re-checks
 #    lifetime of a captured request: sign it, and it is replayable only within this
 #    window. Kept small; a localhost/LAN bus has near-zero clock skew.
 REQUEST_AUTH_WINDOW_SEC = 300
+# 🔴 Test candidates, not confirmed values.
+#    A request over MAX_REQUEST_BYTES is still refused. Its body is read and discarded up
+#    to DRAIN_MAX_BYTES within DRAIN_SEC first, so a client still sending it is reading
+#    when the 413 arrives. Over DRAIN_MAX_BYTES, or past DRAIN_SEC, the client may get a
+#    reset instead.
+DRAIN_MAX_BYTES = 16 * 1024 * 1024
+DRAIN_SEC = 5
+# Longest one socket read may wait for data. A long-poll hold is not a read.
+SOCKET_IDLE_SEC = 3
+# 🔴 Test candidate, not a confirmed value. The whole body of an accepted request must arrive
+#    within this, on a monotonic clock. SOCKET_IDLE_SEC bounds one read; this bounds the
+#    request, so a sender that keeps trickling bytes no longer holds a thread indefinitely.
+#    It is not applied to a long-poll hold or to writing a response.
+BODY_READ_SEC = 30
 
 
 def stamp_mailbox_open(con, node: str) -> None:
@@ -59,6 +75,9 @@ def wire_message(m: dict) -> dict:
 
 class BusHandler(BaseHTTPRequestHandler):
     server_version = "tabd/1.0"
+    # 🔴 StreamRequestHandler applies this to the socket. A read that waits longer raises,
+    #    and the request is dropped: a stalled body no longer holds a thread.
+    timeout = SOCKET_IDLE_SEC
 
     def setup(self) -> None:
         self._db_connections = []
@@ -86,9 +105,120 @@ class BusHandler(BaseHTTPRequestHandler):
         """The request body bytes, read once and cached. Signature verification and
         JSON parsing both need them, and rfile can be read only once."""
         if getattr(self, "_raw_cache", None) is None:
-            n = int(self.headers.get("Content-Length") or 0)
-            self._raw_cache = self.rfile.read(n) if n else b""
+            self._raw_cache = self._read_declared_body()[0]  # only the whole body reaches here
         return self._raw_cache
+
+    def _read_declared_body(self):
+        """(bytes read, declared length, how it ended: "whole", "timeout" or "short").
+
+        🔴 One recv at a time (read1), each waiting at most the idle limit or the time left,
+        so the whole body is bounded in time as well as in size. A body that ends early is
+        "short": the signature does not catch it, because it is verified over the bytes that
+        arrived, so a request declaring more than it sends was stored (jiso, jack M3)."""
+        # 🔴 Parsed the same way as the length check; int() on the raw header raised on
+        #    more than 4,300 digits, including a long run of zeros that the check accepts as 0.
+        declared = declared_length(self.headers.get_all("Content-Length"))[1] or 0
+        chunks, left, deadline = [], declared, time.monotonic() + BODY_READ_SEC
+        try:
+            while left > 0:
+                wait = deadline - time.monotonic()
+                if wait <= 0:
+                    return b"".join(chunks), declared, "timeout"
+                self.connection.settimeout(min(self.timeout, wait))
+                try:
+                    chunk = self.rfile.read1(left)
+                except (socket.timeout, BlockingIOError):
+                    # 🔴 The shortened wait ran out, which is this limit rather than an idle
+                    #    stall. Without this the timeout left the request with no answer at all.
+                    #    Only a wait that expired counts: a reset connection is not a slow one.
+                    if time.monotonic() >= deadline:
+                        return b"".join(chunks), declared, "timeout"
+                    raise
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                left -= len(chunk)
+        finally:
+            self.connection.settimeout(self.timeout)
+        return b"".join(chunks), declared, "whole" if left == 0 else "short"
+
+    def _refused_body_read(self) -> bool:
+        """Read the declared body, and answer 408 when it did not all arrive in time.
+
+        🔴 Runs before _authorized, which is what reads the body today. Nothing is stored:
+        the request never reaches bus_send."""
+        body, declared, ending = self._read_declared_body()
+        # 🔴 A partial body is not the request body. Caching it empty keeps a later reader from
+        #    treating what did arrive as the whole thing.
+        self._raw_cache = body if ending == "whole" else b""
+        if ending == "whole":
+            return False
+        self.close_connection = True
+        if ending == "timeout":
+            self._json(
+                408,
+                {
+                    "error": "request body took too long",
+                    "code": "REQUEST_TIMEOUT",
+                    "message": f"the request body did not arrive within {BODY_READ_SEC} seconds",
+                    "details": {"limit": BODY_READ_SEC, "unit": "seconds"},
+                    "retry": "as_is",
+                },
+            )
+            return True
+        # 🔴 The body ended before Content-Length. This is not a timeout, and the signature does
+        #    not catch it, so the request is refused here, before anything is stored.
+        self._json(
+            400,
+            {
+                "error": "request body is shorter than Content-Length",
+                "code": "REQUEST_INCOMPLETE",
+                "message": f"the request body ended after {len(body)} of {declared} declared bytes",
+                "details": {"bytes": len(body), "declared": declared, "unit": "bytes"},
+                "retry": "as_is",
+            },
+        )
+        return True
+
+    def _refused_length(self) -> bool:
+        """Answer and return True when the declared request length is refused.
+
+        🔴 This runs before _authorized, because signature verification reads the whole
+        body. Without it a registered node could make the daemon hold any Content-Length
+        in memory, and a negative length would block the thread reading until EOF.
+        """
+        refused = request_length_refusal(self.headers.get_all("Content-Length"))
+        if refused is None:
+            return False
+        status, body = refused
+        size = body["details"].get("bytes")  # absent when the length is too long to convert
+        if status == 413 and size is not None and size <= DRAIN_MAX_BYTES:
+            self._discard_body(size)
+        self.close_connection = True
+        self._json(status, body)
+        return True
+
+    def _discard_body(self, size: int) -> None:
+        """Read and drop up to size bytes of the request body, for at most DRAIN_SEC.
+
+        🔴 Each pass is one socket read (read1), with the timeout cut to the time left.
+        read(n) would keep reading until n bytes arrive, so a slow sender could hold it
+        past DRAIN_SEC."""
+        left, deadline = size, time.monotonic() + DRAIN_SEC
+        try:
+            while left > 0:
+                wait = deadline - time.monotonic()
+                if wait <= 0:
+                    break
+                self.connection.settimeout(min(self.timeout, wait))
+                chunk = self.rfile.read1(min(65536, left))
+                if not chunk:
+                    break
+                left -= len(chunk)
+        except OSError:  # includes the timeout; the refusal is sent either way
+            pass
+        finally:
+            self.connection.settimeout(self.timeout)
 
     def _authorized(self) -> bool:
         """Authenticate the request by node-key signature. There is no shared token.
@@ -171,12 +301,19 @@ class BusHandler(BaseHTTPRequestHandler):
 
     def _json(self, code: int, obj) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("X-Robots-Tag", "noindex")
-        self.end_headers()
-        self.wfile.write(body)
+        # 🔴 A socket timeout bounds a whole sendall, not the pause between sends. With the
+        #    idle timeout left on, a large response to a slow reader was cut off (678,244 of
+        #    11,809,904 bytes at 1 s). Writes keep no time limit, as before the idle timeout.
+        self.connection.settimeout(None)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Robots-Tag", "noindex")
+            self.end_headers()
+            self.wfile.write(body)
+        finally:
+            self.connection.settimeout(self.timeout)
 
     def _body(self) -> dict:
         raw = self._raw_body()  # cached; _authorized already read the stream
@@ -189,6 +326,8 @@ class BusHandler(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self):
+        if self._refused_length() or self._refused_body_read():
+            return
         path, _, query = self.path.partition("?")
         q = dict(kv.split("=", 1) for kv in query.split("&") if "=" in kv)
 
@@ -251,7 +390,11 @@ class BusHandler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": "node is required"})
             if node != self._acting():
                 return self._json(403, {"error": "a node may read only its own mailbox"})
-            limit = min(int(q.get("limit", 50)), 200)
+            # 🔴 int() outside try raised in the handler: no response for limit=abc or 4,301 digits.
+            try:
+                limit = min(int(q.get("limit", 50)), 200)
+            except ValueError:
+                return self._json(400, {"error": "limit must be an integer"})
             con = self._connect()
             stamp_mailbox_open(con, node)
             titles = tabus.list_unread_titles(con, node, limit=limit)
@@ -281,7 +424,10 @@ class BusHandler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": "node is required"})
             if node != self._acting():
                 return self._json(403, {"error": "a node may pull only its own mailbox"})
-            limit = min(int(q.get("limit", 10)), 50)
+            try:
+                limit = min(int(q.get("limit", 10)), 50)
+            except ValueError:
+                return self._json(400, {"error": "limit must be an integer"})
             deadline = time.time() + HOLD_SEC
             con = self._connect()
             msgs, quarantined = [], []
@@ -395,6 +541,8 @@ class BusHandler(BaseHTTPRequestHandler):
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
+        if self._refused_length() or self._refused_body_read():
+            return
         if not self._authorized():
             return self._json(401, {"error": "token"})
         path, _, query = self.path.partition("?")
@@ -547,7 +695,12 @@ class BusHandler(BaseHTTPRequestHandler):
             )
             if mid is None:
                 con.close()
-                return self._json(400, {"error": info})
+                # 🔴 `error` stays the sentence older clients read. A coded refusal adds
+                #    code, message, details and retry next to it; the status stays 400.
+                refused = {"error": info}
+                if hasattr(info, "fields"):
+                    refused.update(info.fields())
+                return self._json(400, refused)
             pending = {
                 p["recipient"]: p["pending"]
                 for p in tabus.bus_pending_counts(con, data.get("from", ""))

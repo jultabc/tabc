@@ -34,6 +34,9 @@ def _error(code, detail, **extra):
     return {"ok": False, "error": code, "detail": detail, **extra}
 
 
+_SERVER_REFUSAL_FIELDS = ("code", "message", "details", "retry")
+
+
 def _request(method, path, payload=None, params=None, timeout=10):
     try:
         base = urllib.parse.urlsplit(BASE)
@@ -82,13 +85,38 @@ def _request(method, path, payload=None, params=None, timeout=10):
             return uncertain("Expected a JSON object. Inspect stored state before retrying.")
         return result
     except urllib.error.HTTPError as exc:
-        if exc.code >= 500 or exc.code == 408:
+        if exc.code >= 500:
             return uncertain(f"HTTP {exc.code}; the operation may already have been applied.")
         try:
-            detail = exc.read(2048).decode("utf-8", "replace")
+            raw = exc.read()
         except (OSError, http.client.HTTPException):
-            detail = f"HTTP {exc.code}; error response body unavailable."
-        return _error("HTTP_ERROR", detail, status=exc.code)
+            # 🔴 A refusal is only definite when its body was read: without it there is no
+            #    evidence of what the daemon did, and the status alone could come from
+            #    something else answering. The status is kept for the caller to see.
+            result = uncertain(f"HTTP {exc.code}; the error body could not be read, so the "
+                               "request may already have been applied.")
+            result["status"] = exc.code
+            return result
+        try:
+            server = json.loads(raw)
+        except ValueError:
+            server = None
+        if not isinstance(server, dict):
+            server = None
+        # 🔴 tabd refuses a 408 before anything is stored and says so with a top-level code, which
+        #    makes it a definite failure. Anything else answering 408 — a proxy, a gateway, a body
+        #    that merely contains the word elsewhere — says nothing about what the daemon did.
+        if exc.code == 408 and (server is None or "code" not in server):
+            return uncertain(f"HTTP {exc.code}; the operation may already have been applied.")
+        # 🔴 The whole refusal is kept. `detail` is the response text, uncut; a coded
+        #    refusal's code, message, details and retry are lifted as they are, so a
+        #    caller reads the same code here as from tabd itself.
+        result = _error("HTTP_ERROR", raw.decode("utf-8", "replace"), status=exc.code)
+        if server is not None:
+            for name in _SERVER_REFUSAL_FIELDS:
+                if name in server:
+                    result[name] = server[name]
+        return result
     except (OSError, http.client.HTTPException, ValueError):
         return uncertain("No usable response. Inspect stored state before retrying.")
 
@@ -167,8 +195,8 @@ def tabc_ack(message_id: str, state: str = "READ") -> dict[str, Any]:
 
 
 def _send(subject, body, priority, message_id, **destination):
-    if not subject.strip() or not body.strip():
-        raise ValueError("subject and body must not be empty")
+    # 🔴 tabd decides whether a body or subject is empty (BODY_EMPTY · SUBJECT_EMPTY), so
+    #    every path gets one answer with the same code.
     if priority not in ("now", "next", "batch"):
         raise ValueError("priority must be now, next or batch")
     mid = _id(message_id) if message_id is not None else str(uuid.uuid4())

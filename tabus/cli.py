@@ -402,6 +402,15 @@ def _delivery_report(info, requested):
     return ["⚠ cannot confirm delivery — the response carried no recipients"]
 
 
+def _refusal_line(r):
+    """One line for a coded send refusal: the code, then the size against the limit
+    when the refusal carries one. A pure function."""
+    details = r.get("details") if isinstance(r.get("details"), dict) else {}
+    if "bytes" in details and "limit" in details:
+        return f"code {r['code']} · {details.get('field', 'request')} {details['bytes']}/{details['limit']} bytes"
+    return f"code {r['code']}"
+
+
 def fn_send(a):
     body = a.body
     if a.body_file:
@@ -435,7 +444,11 @@ def fn_send(a):
         )
     code, r = call("POST", MAPPING["send"], payload, node=a.sender)
     if code != 200:
+        # 🔴 The first line stays `failed: <sentence>`; scripts match on it. The code,
+        #    when the daemon sends one, goes on its own line below.
         print("failed:", r.get("error"))
+        if r.get("code"):
+            print(f"  {_refusal_line(r)}")
         sys.exit(1)
     print(f"stored id={r['id']}")
     # 🔴 Print what the server actually stored, read back from its response, not

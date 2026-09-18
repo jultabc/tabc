@@ -6,8 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -119,6 +122,52 @@ class TabcClientTest {
         assertEquals(TabcClient.Outcome.UNKNOWN, result.outcome());
         assertEquals(-1, result.httpStatus());
         assertTrue(!result.responseBody().isBlank());
+    }
+
+    @Test
+    void mapsRequestTooLargeToFailedWithTheReason() {
+        responseStatus.set(413);
+        responseBody.set(
+                "{\"error\":\"request body too large\",\"code\":\"REQUEST_TOO_LARGE\","
+                        + "\"details\":{\"bytes\":600000,\"limit\":524288,\"unit\":\"bytes\"},\"retry\":\"never\"}");
+
+        TabcClient.SendResult result = client().send(List.of("hu"), "event", "body", "now");
+
+        assertEquals(TabcClient.Outcome.FAILED, result.outcome());
+        assertEquals(413, result.httpStatus());
+        assertTrue(result.responseBody().contains("REQUEST_TOO_LARGE"));
+    }
+
+    @Test
+    void mapsConnectionClosedBeforeAnyResponseToUnknown() throws Exception {
+        // The daemon closes without answering when a request stalls past its idle limit or is
+        // larger than it discards. The client cannot tell whether anything was stored.
+        try (ServerSocket closer = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            Thread acceptor =
+                    new Thread(
+                            () -> {
+                                try (Socket socket = closer.accept()) {
+                                    InputStream in = socket.getInputStream();
+                                    in.read(new byte[256]);
+                                } catch (java.io.IOException ignored) {
+                                    // the client side may already be gone
+                                }
+                            });
+            acceptor.start();
+            TabcClient client =
+                    new TabcClient(
+                            URI.create("http://127.0.0.1:" + closer.getLocalPort()),
+                            "sample-program",
+                            privateKeyFile,
+                            Duration.ofSeconds(1),
+                            Duration.ofSeconds(2));
+
+            TabcClient.SendResult result = client.send(List.of("hu"), "event", "body", "now");
+            acceptor.join(2000);
+
+            assertEquals(TabcClient.Outcome.UNKNOWN, result.outcome());
+            assertEquals(-1, result.httpStatus());
+        }
     }
 
     @Test
