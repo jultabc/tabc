@@ -240,6 +240,61 @@ class MigrationTest(unittest.TestCase):
             self.assertTrue(uri, "the source is opened through a URI")
             self.assertIn("mode=ro", target)
 
+    def test_a_stopped_wal_ledger_without_sidecars_can_be_preflighted(self):
+        # A main database copied without its empty WAL sidecars still keeps WAL in its
+        # header. macOS SQLite refuses this database through mode=ro in a read-only
+        # directory unless the connection says the source is immutable.
+        ledger(self.source)
+        con = sqlite3.connect(self.source)
+        try:
+            self.assertEqual(con.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
+        finally:
+            con.close()
+        # SQLite builds differ: some remove empty sidecars on close and some leave them.
+        # Model a main-file-only backup or a source whose empty sidecars were cleaned up.
+        wal = Path(self.source + "-wal")
+        if wal.exists():
+            self.assertEqual(wal.stat().st_size, 0)
+        for sidecar in (wal, Path(self.source + "-shm")):
+            sidecar.unlink(missing_ok=True)
+        self.assertFalse(Path(self.source + "-wal").exists())
+        self.assertFalse(Path(self.source + "-shm").exists())
+
+        env = dict(os.environ, PYTHONPATH=ROOT, PYTHONDONTWRITEBYTECODE="1")
+        # Preflight promises not to write the source, so it must also work when the
+        # directory containing a stopped ledger is deliberately read-only.
+        os.chmod(self.dir, 0o555)
+        try:
+            run = subprocess.run([sys.executable, "-m", "tabus.tac_migration", self.source],
+                                 capture_output=True, text=True, env=env, timeout=60)
+        finally:
+            os.chmod(self.dir, 0o700)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout)["source"]["rows"]["tacs"], 2)
+
+    def test_a_live_wal_ledger_reads_rows_that_exist_only_in_the_wal(self):
+        # immutable=1 ignores WAL. When sidecars exist, the migration must keep the
+        # ordinary read-only connection and include rows committed by the live writer.
+        ledger(self.source)
+        writer = sqlite3.connect(self.source)
+        try:
+            self.assertEqual(writer.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.execute("INSERT INTO tacs(tac_id,label,created_at) VALUES('wal-only','latest',?)", (AT,))
+            writer.execute("INSERT INTO tac_members VALUES('wal-only','codegg')")
+            writer.execute("INSERT INTO messages VALUES('m-wal-only','wal-only','latest')")
+            writer.commit()
+            self.assertTrue(Path(self.source + "-wal").exists())
+            self.assertTrue(Path(self.source + "-shm").exists())
+
+            env = dict(os.environ, PYTHONPATH=ROOT, PYTHONDONTWRITEBYTECODE="1")
+            run = subprocess.run([sys.executable, "-m", "tabus.tac_migration", self.source],
+                                 capture_output=True, text=True, env=env, timeout=60)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(json.loads(run.stdout)["source"]["rows"]["tacs"], 3)
+        finally:
+            writer.close()
+
     def test_a_blocked_run_publishes_no_output_file(self):
         ledger(self.source, extra="CREATE TABLE odd(prev_tac_id TEXT);")
         env = dict(os.environ, PYTHONPATH=ROOT, PYTHONDONTWRITEBYTECODE="1")

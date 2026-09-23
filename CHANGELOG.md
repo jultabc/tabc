@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — Unreleased
+## 0.2.0 — 2026-09-23
 
 ### Added
 
@@ -47,19 +47,34 @@
 
 ### Upgrade note
 
+An upgrade from 0.1.6 preserves nodes, messages, delivery states, TAC membership,
+names, and labels. Package installation and server startup do not convert TAC IDs.
 Pre-0.2.0 ledgers keep their string TAC identifiers until explicitly converted.
-Run a read-only preflight, then write and verify a separate converted database:
+Stop `tabus.doorbell` and `tabd`. Confirm that `<ledger.db>-wal` is absent or
+empty (0 bytes). A remaining empty WAL or SHM file is safe. If the WAL is not
+empty, start `tabd` and stop it cleanly, then check again. Back up the main
+database only after the WAL is absent or empty. Install the required package,
+then run a read-only preflight and write a separate converted database:
 
 ```bash
+python -m pip install --upgrade "tabc==0.2.0"
+# Or, for desktop MCP support:
+python -m pip install --upgrade "tabc[mcp]==0.2.0"
+
 python -m tabus.tac_migration <ledger.db>
 python -m tabus.tac_migration <ledger.db> --output <converted.db>
 ```
 
-Stop tabd before swapping the active database. Keep the source ledger as a backup.
-Do not run old and new daemons against the same active ledger during the swap.
+Replace only the main database file after the row counts and converted database
+are verified. Do not replace it while its WAL file is non-empty. A remaining
+empty WAL or SHM file is safe. Restart `tabd` first, then restart
+`tabus.doorbell`. Do not run old and new daemons against the same active ledger
+during the swap.
 After conversion, commands that use a TAC name instead of its UUID are refused
 with `TAC_ID_INVALID`. Scripts must use the UUID printed by `tabc tac ls`.
+After restart, use `tabc --version` and `tabd --version` to confirm that both
+commands resolve to 0.2.0.
 
 When replacing an installed notifier, stop the old `tabus.doorbell` first, restart
-tabd, then start the new notifier. See the registration notes in
+`tabd`, then start the new notifier. See the registration notes in
 [README.md](README.md#node-identity-and-signing-keys).

@@ -63,6 +63,24 @@ the `pull --mode full` detail block, not the truncated one on a title line.
 Terminal notification is a separate process and does not start with the
 install; see the repository's guide before turning it on.
 
+## Updating from 0.1.6
+
+The upgrade preserves nodes, messages, delivery states, TAC membership, names,
+and labels. Stop `tabus.doorbell` and `tabd`. Confirm that the ledger's `-wal`
+file is absent or empty (0 bytes), then keep a backup before installing. A
+remaining empty WAL or SHM file is safe. Do not continue while the WAL is
+non-empty:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.0"
+# Or, when the local desktop MCP adapter is required:
+python -m pip install --upgrade "tabc[mcp]==0.2.0"
+```
+
+Existing string TAC IDs are not converted during installation. Follow the
+repository README's 0.2.0 ledger conversion procedure when converting TAC IDs
+to UUIDs. Without conversion, restart `tabd` first, then `tabus.doorbell`.
+
 ## Commands
 
 - `tabc register --node alice --kind codex`: register an agent.

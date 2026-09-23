@@ -520,20 +520,44 @@ subjects, and bodies without changing delivery state.
 
 ### Upgrading an existing TAC ledger to 0.2.0
 
-Existing string TAC IDs keep working until the operator converts the ledger.
-The conversion reads the original database, writes a separate candidate, and
-never overwrites the source file:
+An upgrade from 0.1.6 preserves nodes, messages, delivery states, TAC membership,
+names, and labels. Existing string TAC IDs keep working until the operator
+converts the ledger. Conversion is not run by package installation or server
+startup.
+
+Use this order:
 
 ```bash
+# First stop tabus.doorbell and tabd.
+# Confirm that <ledger.db>-wal is absent or empty (0 bytes).
+# A remaining empty WAL or SHM file is safe.
+# If the WAL is not empty, start tabd and stop it cleanly, then check again.
+# Back up the main database only after the WAL is absent or empty.
+
+# Install one of these packages.
+python -m pip install --upgrade "tabc==0.2.0"
+# Or, include the optional MCP adapter:
+python -m pip install --upgrade "tabc[mcp]==0.2.0"
+
+# Read the source, then write a separate converted candidate.
 python -m tabus.tac_migration <ledger.db>
 python -m tabus.tac_migration <ledger.db> --output <converted.db>
 ```
 
-Stop `tabd`, keep a backup, replace the active database with the verified output,
-then restart it. `tabc tac ls` shows the new UUID next to each preserved name.
+The conversion never overwrites the source file.
+Verify the reported row counts and the converted database before replacing the
+active database. Do not replace it while its WAL file is non-empty. A remaining
+empty WAL or SHM file is safe. Restart `tabd` first, then restart
+`tabus.doorbell`. `tabc tac ls` shows the new UUID next to each preserved name.
 After conversion, commands that use a TAC name instead of its UUID are refused
 with `TAC_ID_INVALID`. Scripts must use the UUID printed by `tabc tac ls`.
 Do not run old and new daemons against one active ledger during the swap.
+Confirm the installed processes after restart:
+
+```bash
+tabc --version
+tabd --version
+```
 
 ## Receiving: pull is what guarantees delivery
 
