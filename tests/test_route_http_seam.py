@@ -388,7 +388,7 @@ try:
     check("it leaves another node's route alone", route_state("bob") == (PANE, None))
 
     # 5. A signed client that saw route variables but could not prove terminal
-    # ownership can revoke only the exact previously stored route it observed.
+    # ownership must leave existing routes unchanged, even with legacy revoke fields.
     route_less_bob = {
         k: v for k, v in base_bob.items() if k not in ("adapter", "target", "host_id")
     }
@@ -404,13 +404,12 @@ try:
             revoke_host_id=HOST,
         ),
     )
-    check("rejected provenance can revoke the matching old route", code == 200)
+    check("legacy rejected-provenance request still registers", code == 200)
     bob_after = route_state("bob")
-    check("the exact matching old route is revoked", bob_after is not None and bob_after[1] is not None)
+    check("failed proof preserves the exact matching old route", bob_after == (PANE, None))
 
     # A route migrated from the schema before host_id has NULL there. The current
-    # client can still identify the exact node, adapter, and target, and must be
-    # able to retire that unverified legacy row rather than leave a stale bell.
+    # client cannot conclude that it is wrong just because local capture failed.
     legacy_key = nodekey.key_path("legacy-null-host")
     legacy_pub = nodekey.public_key_b58(legacy_key)
     legacy_base = {
@@ -450,10 +449,10 @@ try:
         ),
     )
     legacy_after = route_state("legacy-null-host")
-    check("a hostless migrated route cleanup succeeds", code == 200, reason(body))
+    check("a hostless migrated route registration succeeds", code == 200, reason(body))
     check(
-        "the exact hostless unverified legacy route is revoked",
-        legacy_after is not None and legacy_after[1] is not None,
+        "failed proof preserves a hostless unverified legacy route",
+        legacy_after == (LEGACY_PANE, None),
     )
 
     # A delayed rejection for route A can arrive after an older client has moved

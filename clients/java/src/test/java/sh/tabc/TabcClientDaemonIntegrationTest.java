@@ -146,6 +146,60 @@ class TabcClientDaemonIntegrationTest {
         assertFalse(mailboxAfterForgery.contains("[PROGRAM_EVENT] FORGED"));
     }
 
+    @Test
+    void pythonDaemonRefusesCodedBodyAndRequestSizeAsFailed() throws Exception {
+        TabcClient client = client(stateHome.resolve(".node_key." + SENDER));
+
+        TabcClient.SendResult body =
+                client.send(List.of(RECIPIENT), "[PROGRAM_EVENT] BODY_65537", "a".repeat(65537), "now", "n-java-body");
+        assertEquals(TabcClient.Outcome.FAILED, body.outcome());
+        assertEquals(400, body.httpStatus());
+        assertTrue(body.responseBody().contains("\"code\": \"BODY_TOO_LARGE\""), body.responseBody());
+
+        // Over the 524,288-byte request limit and under the discard limit: the daemon reads the
+        // body before answering, so the refusal reaches the client every time.
+        for (int i = 0; i < 5; i++) {
+            TabcClient.SendResult request =
+                    client.send(
+                            List.of(RECIPIENT),
+                            "[PROGRAM_EVENT] REQUEST_600000",
+                            "a".repeat(600000),
+                            "now",
+                            "n-java-request-" + i);
+            assertEquals(TabcClient.Outcome.FAILED, request.outcome(), request.responseBody());
+            assertEquals(413, request.httpStatus());
+            assertTrue(request.responseBody().contains("\"code\": \"REQUEST_TOO_LARGE\""), request.responseBody());
+        }
+
+        String mailbox = cli("-m", "tabus.cli", "dm", "--node", RECIPIENT);
+        assertFalse(mailbox.contains("BODY_65537"), mailbox);
+        assertFalse(mailbox.contains("REQUEST_600000"), mailbox);
+    }
+
+    @Test
+    void requestOverTheDiscardLimitIsNeverReportedStored() throws Exception {
+        TabcClient client = client(stateHome.resolve(".node_key." + SENDER));
+
+        // 17 MiB: the daemon refuses without reading. The client may see the 413 or only a closed
+        // connection; either way nothing is stored and the result is not STORED.
+        TabcClient.SendResult result =
+                client.send(
+                        List.of(RECIPIENT),
+                        "[PROGRAM_EVENT] REQUEST_17MIB",
+                        "a".repeat(17 * 1024 * 1024),
+                        "now",
+                        "n-java-request-17mib");
+        System.out.println("17 MiB request: " + result.outcome() + " " + result.httpStatus() + " " + result.responseBody());
+
+        if (result.outcome() == TabcClient.Outcome.FAILED) {
+            assertEquals(413, result.httpStatus());
+        } else {
+            assertEquals(TabcClient.Outcome.UNKNOWN, result.outcome());
+        }
+        String mailbox = cli("-m", "tabus.cli", "dm", "--node", RECIPIENT);
+        assertFalse(mailbox.contains("REQUEST_17MIB"), mailbox);
+    }
+
     private TabcClient client(Path keyPath) {
         return new TabcClient(
                 baseUri, SENDER, keyPath, Duration.ofSeconds(1), Duration.ofSeconds(3));

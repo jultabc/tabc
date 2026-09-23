@@ -82,9 +82,11 @@ class AdapterTests(unittest.TestCase):
         })["status"], 403)
 
     def test_tac_view_is_read_only_and_send_gate_is_enforced(self):
-        tac = "topic-" + uuid.uuid4().hex
+        name = "topic-" + uuid.uuid4().hex
         self.assertTrue(adapter._request("POST", "/tac_create",
-                        {"tac": tac, "by": self.alice})["ok"])
+                        {"tac": name, "by": self.alice})["ok"])
+        tac = [item["tac_id"] for item in adapter.tabc_tacs()["tacs"]
+               if item.get("name") == name][0]
         for node in (self.alice, self.bob):
             self.assertTrue(adapter._request("POST", "/tac_add",
                             {"tac": tac, "node": node, "by": self.alice})["ok"])
@@ -134,8 +136,7 @@ class AdapterTests(unittest.TestCase):
                 adapter.tabc_pull(51)
             for call in (lambda: adapter.tabc_open("prefix"),
                          lambda: adapter.tabc_ack(str(uuid.uuid4()), "INJECTED"),
-                         lambda: adapter.tabc_send("", "subject", "body"),
-                         lambda: adapter.tabc_send(self.bob, "", "body")):
+                         lambda: adapter.tabc_send("", "subject", "body")):
                 with self.assertRaises(ValueError):
                     call()
             request.assert_not_called()
@@ -157,7 +158,87 @@ class AdapterTests(unittest.TestCase):
             error = urllib.error.HTTPError(adapter.BASE, code, "test", {}, io.BytesIO(b"refused"))
             with self.subTest(code=code), patch.object(adapter._opener, "open", side_effect=error):
                 result = adapter.tabc_send(self.bob, "error", "test")
+                # 🔴 A 408 without a code came from something between here and tabd, which says
+                #    nothing about what was stored. tabd's own 408 carries a code (below).
                 self.assertEqual(result["error"], "UNKNOWN" if code >= 500 or code == 408 else "HTTP_ERROR")
+
+    def test_408_is_only_definite_with_a_readable_top_level_code(self):
+        # 🔴 Counterexamples from the independent review: a code somewhere in the text is not
+        #    tabd's coded refusal, and a body that cannot be read leaves the request unknown.
+        class Unreadable(io.BytesIO):
+            def read(self, *a):
+                raise http.client.IncompleteRead(b"half")
+
+        bodies = [b'[{"code": "REQUEST_TIMEOUT"}]', b'{"detail": {"code": "REQUEST_TIMEOUT"}}',
+                  b"<html><body>code REQUEST_TIMEOUT</body></html>", b'"code"', b""]
+        for body in bodies:
+            error = urllib.error.HTTPError(adapter.BASE, 408, "test", {}, io.BytesIO(body))
+            with self.subTest(body=body[:24]), patch.object(adapter._opener, "open", side_effect=error):
+                result = adapter.tabc_send(self.bob, "error", "test")
+            self.assertEqual(result["error"], "UNKNOWN", body[:24])
+        error = urllib.error.HTTPError(adapter.BASE, 408, "test", {}, Unreadable(b"half"))
+        with patch.object(adapter._opener, "open", side_effect=error):
+            result = adapter.tabc_send(self.bob, "error", "test")
+        self.assertEqual(result["error"], "UNKNOWN")
+        self.assertIn("could not be read", result["detail"])
+        # Any status whose body could not be read is unknown for a write, not a definite failure.
+        error = urllib.error.HTTPError(adapter.BASE, 400, "test", {}, Unreadable(b"half"))
+        with patch.object(adapter._opener, "open", side_effect=error):
+            result = adapter.tabc_send(self.bob, "error", "test")
+        self.assertEqual((result["error"], result["status"]), ("UNKNOWN", 400))
+        # A read-only tool says the request failed rather than claiming an unknown write.
+        error = urllib.error.HTTPError(adapter.BASE, 400, "test", {}, Unreadable(b"half"))
+        with patch.object(adapter._opener, "open", side_effect=error):
+            result = adapter.tabc_tacs()
+        self.assertEqual(result["error"], "REQUEST_FAILED")
+
+    def test_coded_408_is_a_definite_failure(self):
+        body = json.dumps({"error": "request body took too long", "code": "REQUEST_TIMEOUT",
+                           "message": "the request body did not arrive within 30 seconds",
+                           "details": {"limit": 30, "unit": "seconds"}, "retry": "as_is"}).encode()
+        error = urllib.error.HTTPError(adapter.BASE, 408, "test", {}, io.BytesIO(body))
+        with patch.object(adapter._opener, "open", side_effect=error):
+            result = adapter.tabc_send(self.bob, "error", "test")
+        self.assertEqual((result["error"], result["status"]), ("HTTP_ERROR", 408))
+        self.assertEqual((result["code"], result["retry"]), ("REQUEST_TIMEOUT", "as_is"))
+        self.assertEqual(result["details"], {"limit": 30, "unit": "seconds"})
+
+    def test_coded_refusal_is_kept_whole(self):
+        result = adapter.tabc_send(self.bob, "large", "a" * 70000)
+        self.assertEqual((result["error"], result["status"]), ("HTTP_ERROR", 400))
+        self.assertEqual((result["code"], result["retry"]), ("BODY_TOO_LARGE", "never"))
+        self.assertEqual(result["details"], {"field": "body", "bytes": 70000, "limit": 65536,
+                                             "unit": "utf8_bytes"})
+        self.assertEqual(json.loads(result["detail"])["error"], "body is missing or too large")
+
+    def test_blank_body_and_subject_are_judged_by_tabd(self):
+        for body in ("", " \t\n", "\u3000"):
+            result = adapter.tabc_send(self.bob, "blank", body)
+            self.assertEqual((result["status"], result["code"]), (400, "BODY_EMPTY"), repr(body))
+        for subject in ("", " ", "\u3000"):
+            result = adapter.tabc_send(self.bob, subject, "body")
+            self.assertEqual((result["status"], result["code"]), (400, "SUBJECT_EMPTY"), repr(subject))
+        self.assertEqual(adapter.tabc_sent()["messages"], [])
+
+    def test_long_refusal_is_not_cut(self):
+        refusal = {"error": "read their messages first: " + ", ".join(f"n{i:03d} (1)" for i in range(400)),
+                   "code": "UNREAD_BLOCKED", "message": "open them",
+                   "details": {"scope": "dm", "recipients": [{"node": f"n{i:03d}", "unread": 1}
+                                                            for i in range(400)]},
+                   "retry": "after_condition", "ignored": "not lifted"}
+        raw = json.dumps(refusal).encode()
+        self.assertGreater(len(raw), 2048 * 4)
+        for body, lifted in ((raw, True), (b"plain refusal " * 400, False)):
+            error = urllib.error.HTTPError(adapter.BASE, 400, "test", {}, io.BytesIO(body))
+            with patch.object(adapter._opener, "open", side_effect=error):
+                result = adapter.tabc_send(self.bob, "long", "refusal")
+            self.assertEqual(result["detail"], body.decode())
+            self.assertNotIn("ignored", result)
+            if lifted:
+                self.assertEqual(result["details"], refusal["details"])
+                self.assertEqual((result["code"], result["retry"]), ("UNREAD_BLOCKED", "after_condition"))
+            else:
+                self.assertNotIn("code", result)
 
     def test_bad_write_responses_are_unknown(self):
         for body in (b"not json", b"[]", b"{}", b'{"id":"unexpected-id"}'):
@@ -173,12 +254,14 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(adapter.tabc_who()["error"], "BAD_NODE_KEY")
             create.assert_not_called()
 
-    def test_unreadable_refusal_body_preserves_status_and_request_id(self):
+    def test_unreadable_refusal_body_is_unknown_and_keeps_status_and_request_id(self):
+        # 🔴 The refusal could not be read, so a write is UNKNOWN rather than a definite failure:
+        #    a caller that resends with a new id would store the message twice.
         error = urllib.error.HTTPError(adapter.BASE, 403, "test", {}, None)
         error.read = MagicMock(side_effect=http.client.IncompleteRead(b"partial"))
         with patch.object(adapter._opener, "open", side_effect=error):
             result = adapter.tabc_send(self.bob, "x", "y")
-            self.assertEqual(result["status"], 403)
+            self.assertEqual((result["error"], result["status"]), ("UNKNOWN", 403))
             uuid.UUID(result["request_id"])
 
     def test_optional_sdk_and_python_version_have_clear_errors(self):

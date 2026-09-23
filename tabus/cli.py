@@ -92,6 +92,8 @@ MAPPING = {
     "tac_remove": "/tac_remove",
     "tac_close": "/tac_close",
     "tac_link": "/tac_link",
+    "tac_rename": "/tac_rename",
+    "tac_check": "/tac_check",
     # name uses only the register endpoint; setting the session title is local
 }
 
@@ -288,12 +290,9 @@ def fn_register(a):
     else:
         captured = _capture_route()
         adapter, target = captured
-        if getattr(captured, "rejected", False):
-            payload["revoke_route"] = True
-            payload["revoke_adapter"] = captured.rejected_adapter
-            payload["revoke_target"] = captured.rejected_target
-            payload["revoke_host_id"] = _host_id()
-        elif take_route:
+        # A failed local capture cannot invalidate a previously stored route.
+        # Do not send legacy auto-revocation fields, even to an older daemon.
+        if not getattr(captured, "rejected", False) and take_route:
             payload["take_route"] = True
     if adapter:
         payload["adapter"] = adapter
@@ -303,7 +302,8 @@ def fn_register(a):
             _host_id()
         )  # which installation owns this route, so others answer NOT_MINE
     elif auto_enter:
-        print("--auto-enter on requires a verified iTerm or tmux route")
+        print("--auto-enter on refused: this command could not verify its connection "
+              "to the iTerm tab or tmux pane. Registration was not sent; existing routes are unchanged.")
         sys.exit(2)
     # Registration must be signed by the node being registered. TABC_NODE may name
     # another active agent, so the explicit bootstrap identity always wins here.
@@ -402,6 +402,15 @@ def _delivery_report(info, requested):
     return ["⚠ cannot confirm delivery — the response carried no recipients"]
 
 
+def _refusal_line(r):
+    """One line for a coded send refusal: the code, then the size against the limit
+    when the refusal carries one. A pure function."""
+    details = r.get("details") if isinstance(r.get("details"), dict) else {}
+    if "bytes" in details and "limit" in details:
+        return f"code {r['code']} · {details.get('field', 'request')} {details['bytes']}/{details['limit']} bytes"
+    return f"code {r['code']}"
+
+
 def fn_send(a):
     body = a.body
     if a.body_file:
@@ -435,7 +444,11 @@ def fn_send(a):
         )
     code, r = call("POST", MAPPING["send"], payload, node=a.sender)
     if code != 200:
+        # 🔴 The first line stays `failed: <sentence>`; scripts match on it. The code,
+        #    when the daemon sends one, goes on its own line below.
         print("failed:", r.get("error"))
+        if r.get("code"):
+            print(f"  {_refusal_line(r)}")
         sys.exit(1)
     print(f"stored id={r['id']}")
     # 🔴 Print what the server actually stored, read back from its response, not
@@ -812,20 +825,44 @@ def fn_tac(a):
             return
         for g in groups:
             label = f" ({g['label']})" if g.get("label") else ""
-            print(f"{g['tac_id']:<14} {g.get('member_count', 0)} members{label}")
+            name = g.get("name") or g["tac_id"]
+            line = f"{name:<20} {g.get('member_count', 0)} members{label}"
+            # 🔴 The identifier is printed too. It is what the tac keeps through a
+            #    rename, and what a letter written today still resolves to later.
+            if g.get("name"):
+                line += f"\n{'':<20} id {g['tac_id']}"
+            print(line)
+        return
+    if action == "check":
+        # 🔴 Which tacs answer no lookup because their stored key was written by an
+        #    interpreter that folds that name differently. Read-only.
+        _, r = call("GET", MAPPING["tac_check"], node=a.node)
+        if r.get("error"):
+            print("failed:", r["error"])
+            sys.exit(1)
+        rows = r.get("mismatched", [])
+        if not rows:
+            print("every tac name resolves here")
+            return
+        print(f"{len(rows)} tac(s) answer no lookup on this interpreter:")
+        for row in rows:
+            print(f"  {row.get('name')}  id {row.get('tac_id')}")
+        print("rename one of them to write the key again: tabc tac rename <id> <name>")
         return
     if action == "show":
         if not a.tac:
             print("usage: tabc tac show <tac>   (add --node <you> to catch up your unread)")
             sys.exit(1)
-        # 🔴 With --node, this marks that member's unread in the tac as read, which
-        #    lifts the read-before-send block. Without it, viewing changes nothing.
+        # With --node, only returned deliveries advance to INJECTED, not READ.
+        # Unreturned deliveries may still block sending. Without it, no state changes.
         _url = f"{MAPPING['tac_messages']}?tac={a.tac}&limit={a.limit}"
         if a.node:
             _url += f"&node={a.node}"
         _, r = call("GET", _url, node=a.node)
         if r.get("error"):
             print("failed:", r["error"])
+            if r.get("code"):
+                print(f"  code {r['code']}" + (f" · {r['message']}" if r.get("message") else ""))
             sys.exit(1)
         # 🔴 A missing tac comes back as exists:false, not 404. Here 404 means only
         #    that the endpoint does not exist.
@@ -836,12 +873,17 @@ def fn_tac(a):
         msgs = r.get("messages", [])
         closed = r.get("closed_at")
         status = f" · 🔒 closed ({closed[:16]})" if closed else ""
+        # 🔴 Named by what a reader types. The identifier follows it, because that is
+        #    what a rename keeps and what other tools take.
+        _name = r.get("name") or r.get("tac")
+        _id = f" · id {r.get('tac')}" if r.get("name") else ""
         print(
-            f"[tac {r.get('tac')}] members: {members} · {len(msgs)} messages, newest first{status}"
+            f"[tac {_name}]{_id} members: {members} · {len(msgs)} messages, newest first{status}"
         )
         if r.get("marked_read"):
             print(
-                f"  ✅ caught up on {r['marked_read']} unread — you can send to this tac now"
+                f"  caught up on {r['marked_read']} returned messages (INJECTED, not READ); "
+                "unreturned messages may still block sending"
             )
         if closed and r.get("close_summary"):
             print(f"  closing summary: {r['close_summary']}")
@@ -852,7 +894,7 @@ def fn_tac(a):
             print(f"  continued by: {', '.join(links['children'])}")
         for m in msgs:
             head = f"{m.get('accepted_at', '')[:16]} {m.get('sender_id', '?')}"
-            print(f"  {head}: {m.get('subject', '')}")
+            print(f"  {head}: {m.get('subject', '')} [id={m.get('id', '?')}]")
             for ln in (m.get("body") or "").strip().splitlines():
                 print(f"      {ln}")
         return
@@ -864,12 +906,26 @@ def fn_tac(a):
     by = _audit_actor(a.by, acting, _user_email())
     if action == "create":
         if not a.tac:
-            print("usage: tabc tac create <tac> [--label X]")
+            print("usage: tabc tac create <name> [--description X]")
             sys.exit(1)
         code, r = call(
             "POST",
             MAPPING["tac_create"],
-            {"tac": a.tac, "label": a.label, "by": by},
+            # 🔴 --description is the current spelling; --label is the older one and
+            #    still works. getattr, because a caller may build the arguments itself.
+            {"tac": a.tac,
+             "label": getattr(a, "description", None) or getattr(a, "label", None),
+             "by": by},
+            node=acting,
+        )
+    elif action == "rename":
+        if not (a.tac and a.member):
+            print("usage: tabc tac rename <tac id> <new name>   (the identifier does not change)")
+            sys.exit(1)
+        code, r = call(
+            "POST",
+            MAPPING["tac_rename"],
+            {"tac": a.tac, "name": a.member, "by": by},
             node=acting,
         )
     elif action == "add":
@@ -913,12 +969,15 @@ def fn_tac(a):
             node=acting,
         )
     else:
-        print(f"unknown action: {action} (create/add/rm/ls/show/close/link)")
+        print(f"unknown action: {action} (create/add/rm/rename/ls/show/check/close/link)")
         sys.exit(1)
     if code == 200 and r.get("ok"):
         print(r.get("msg"))
     else:
         print(f"failed: {r.get('msg') or r.get('error')}")
+        # 🔴 The code beside the sentence, in the shape a send refusal already prints.
+        if r.get("code"):
+            print(f"  code {r['code']}" + (f" · {r['message']}" if r.get("message") else ""))
         sys.exit(1)
 
 
@@ -1139,18 +1198,23 @@ COMMANDS = {
     ),
     "tac": (
         fn_tac,
-        "tac: create/add/rm/ls/show/search/close/link; search never marks mail read",
+        "tac: create/add/rm/rename/ls/show/check/search/close/link; search never marks mail read",
         [
             (
                 ("action",),
                 dict(
-                    choices=["create", "add", "rm", "ls", "show", "close", "link", "search"],
-                    help="create/add/rm/ls/show | close <tac> --summary | link <child> <parent>",
+                    choices=["create", "add", "rm", "rename", "ls", "show", "check",
+                             "close", "link", "search"],
+                    help="create/add/rm/ls/show | rename <tac> <new name> | "
+                    "close <tac> --summary | link <child> <parent>",
                 ),
             ),
-            (("tac",), dict(nargs="?", help="tac name (not needed for ls); for link this is the child")),
-            (("member",), dict(nargs="?", help="node for add and rm; for link this is the parent")),
-            (("--label",), dict(default=None, help="label, for create")),
+            (("tac",), dict(nargs="?", help="the tac, by its identifier (not needed for ls); "
+                                            "find it with ls or search; for link this is the child")),
+            (("member",), dict(nargs="?", help="node for add and rm; for link this is the parent; "
+                                               "for rename this is the new name")),
+            (("--description",), dict(default=None, help="what the tac is for, for create")),
+            (("--label",), dict(default=None, help="the older spelling of --description")),
             (("--query",), dict(default=None, help="literal text for search; members only, no read acknowledgment")),
             (
                 ("--summary",),
@@ -1161,8 +1225,8 @@ COMMANDS = {
                 ("--node",),
                 dict(
                     default=None,
-                    help="your node. For show it catches up your unread in this tac, which lifts the "
-                    "read-before-send block (without it, viewing changes nothing). For create/add/rm/"
+                    help="your node. For show only returned messages advance to INJECTED, not READ; "
+                    "unreturned messages may still block sending (without it, viewing changes nothing). For create/add/rm/"
                     "close/link it is recorded as the actor in the audit",
                 ),
             ),

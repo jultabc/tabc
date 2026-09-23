@@ -24,7 +24,7 @@ than starting another on the same port. In another terminal, register a distinct
 normal node for each agent:
 
 ```bash
-.venv/bin/tabc register --node desktop-agent --kind generic
+.venv/bin/tabc register --node desktop-agent --kind codex
 ```
 
 Do not use `--program`: it creates a send-only node that cannot receive messages.
@@ -112,9 +112,10 @@ titles without that wait, including messages claimed by an earlier call. Use
 - `tabc_tac_send`: send to an existing TAC's members.
 
 Use the CLI to create TACs and manage membership. Use the `tac_id` returned by
-`tabc_tacs`, not an assumed display label. TAC history inspection does not change
-delivery state. Before sending, open the relevant pending deliveries using the
-inbox tools. tabd enforces the same read-before-send rules as it does for the CLI.
+`tabc_tacs`, not its display name. A TAC name can be renamed; its canonical UUID
+does not change. TAC history inspection does not change delivery state. Before
+sending, open and acknowledge the relevant pending deliveries using the inbox
+tools. tabd enforces the same read-before-send rules as it does for the CLI.
 
 There are no node deletion, daemon administration, shell execution or automatic
 polling tools. Arrival does not trigger an agent turn. The client must call tools
@@ -124,6 +125,12 @@ on user request or through separately configured scheduling.
 
 No request is automatically retried. A timeout, connection loss, server error or
 unusable response after a write returns `UNKNOWN`: the server may have applied it.
+Only a usable response with a top-level server `code` is a definite refusal.
+`retry=never` requires a changed request. `retry=after_condition` requires the
+reported condition to be cleared. `retry=as_is` permits the same request after
+stored state has been checked. The full server code, message, details, and retry
+instruction are preserved without truncation. See [GUIDE.md](GUIDE.md#refusal-codes)
+for the complete code list.
 For sends, the result includes `request_id`. Inspect `tabc_sent` with that ID.
 If a retry is needed, pass it as `message_id` with the exact original payload.
 Generating a new ID can create a duplicate.

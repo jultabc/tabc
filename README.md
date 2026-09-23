@@ -40,6 +40,8 @@ agent runs.
 > One dependency, `cryptography`, for the signatures that authenticate every
 > request. SQLite for storage; standard library for the rest.
 
+See the [changelog](CHANGELOG.md) for release-specific changes and upgrade notes.
+
 It is meant to stay small enough to read. Count it rather than trust a number
 printed here — a baked total is stale by the next commit, which is why this
 project keeps route lists and counts out of the prose:
@@ -312,8 +314,9 @@ exit code will not catch the usual mistake: if every recipient is unregistered
 the command exits 1, but if only one name is misspelled the message is stored
 for the rest and the command still exits 0.
 
-The `N pending` figure is that node's **total** unread, not a receipt for this
-message.
+The `N pending` figure is that recipient's unread count **from this sender**,
+not a receipt for this message. `tabc who` reports the recipient's total unread
+count across all senders.
 
 `tabc who` reports presence separately, one line per node:
 
@@ -470,8 +473,10 @@ doorbell can sound. The notification header names the scope: `[dm]` for
 addressed to a node. The header `[dm]` and the command `dm` are different
 things that share a name.
 
-A **tac** (Topic Archive Capsule) is a named conversation. Once closed, a tac
-cannot be reopened — the closing summary is the record.
+A **tac** (Topic Archive Capsule) is a named conversation. The server gives it
+a UUID when it is created. The name is for display and search; commands that
+change or address the tac use the UUID. Renaming does not change that UUID.
+Once closed, a tac cannot be reopened — the closing summary is the record.
 
 ### Working with a tac
 
@@ -480,30 +485,55 @@ all of them. Membership is explicit: the creator is recorded as the actor but is
 not automatically a member, so add each node that should receive the messages.
 
 ```bash
-# Create a topic and add its members
-tabc tac create planning --node alice
-tabc tac add planning bob --node alice
-tabc tac add planning carol --node alice
+# Create a topic. Copy the UUID printed by create or tac ls.
+tabc tac create planning --description "parser work" --node alice
+tabc tac ls --node alice
+
+# Add members using that UUID.
+tabc tac add <planning-uuid> bob --node alice
+tabc tac add <planning-uuid> carol --node alice
 
 # Post a line — it fans out to every member and can ring their doorbells
-tabc send --sender alice --tac planning \
+tabc send --sender alice --tac <planning-uuid> \
     --subject "kickoff" --body "starting on the parser"
 
 # Read it: ls lists the tacs, show reads one
 tabc tac ls --node alice
-tabc tac show planning --node bob   # also catches up your unread here
+tabc tac show <planning-uuid> --node bob
+# Only the returned messages advance to INJECTED. Acknowledge each full message
+# UUID as READ after reviewing it; older unreturned messages may still block send.
+tabc ack --node bob --id <message-uuid> --state READ
 
 # Close it when the topic ends. The summary is fixed as the record and a closed
 # tac cannot reopen; a follow-up topic links back to the one it continues.
-tabc tac close planning --node alice --summary "parser shipped; next: speedups"
+tabc tac close <planning-uuid> --node alice --summary "parser shipped; next: speedups"
 tabc tac create speedups --node alice
-tabc tac link speedups planning --node alice
+tabc tac link <speedups-uuid> <planning-uuid> --node alice
 ```
 
-`create`, `add`, `rm`, `close`, and `link` change state and record the acting
-node (from `--node`, or `TABC_NODE`) in the audit. `ls` and `show` are read-only;
-passing `--node` to `show` also marks your unread in that tac as caught up, which
-is what lifts the read-before-send block for it.
+`create`, `add`, `rm`, `rename`, `close`, and `link` change state and record the
+acting node (from `--node`, or `TABC_NODE`) in the audit. `ls`, `check`, and
+`search` are read-only. `show` is read-only without `--node`; with `--node`, only
+the returned deliveries advance to `INJECTED`, not `READ`. Use `ack` after
+reviewing each message. `search --query <text>` searches names, descriptions,
+subjects, and bodies without changing delivery state.
+
+### Upgrading an existing TAC ledger to 0.2.0
+
+Existing string TAC IDs keep working until the operator converts the ledger.
+The conversion reads the original database, writes a separate candidate, and
+never overwrites the source file:
+
+```bash
+python -m tabus.tac_migration <ledger.db>
+python -m tabus.tac_migration <ledger.db> --output <converted.db>
+```
+
+Stop `tabd`, keep a backup, replace the active database with the verified output,
+then restart it. `tabc tac ls` shows the new UUID next to each preserved name.
+After conversion, commands that use a TAC name instead of its UUID are refused
+with `TAC_ID_INVALID`. Scripts must use the UUID printed by `tabc tac ls`.
+Do not run old and new daemons against one active ledger during the swap.
 
 ## Receiving: pull is what guarantees delivery
 

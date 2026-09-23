@@ -9,7 +9,9 @@ Contract:
 - An empty TAC after excluding the sender must explicitly reject sending, not pretend success.
 - group_messages observes conversations by message.tac_id without changing deliveries.
 - tac_action_allowed is the shared guard for create, add, rm, and send: patching it to deny must block every path, proving the guard is effective, not merely present.
-Temporary database only, never live data. Run directly and check the exit code."""
+This file also keeps the pre-0.2.0 string-identifier contract covered. UUID
+behavior is covered by test_tac_wiring.py. Temporary database only, never live
+data. Run directly and check the exit code."""
 
 import os
 import sys
@@ -33,6 +35,13 @@ def check(name, cond):
 
 
 con = tabus.connect()
+# Simulate a ledger created before 0.2.0. The new schema must not silently add
+# identity columns to an existing table; that ledger keeps string TAC IDs until
+# the explicit conversion tool runs.
+con.execute("""CREATE TABLE tacs (
+    tac_id TEXT PRIMARY KEY, label TEXT, created_at TEXT NOT NULL,
+    created_by TEXT, closed_at TEXT, close_summary TEXT, closed_by TEXT
+)""")
 con.executescript(tabus.SCHEMA)
 con.commit()
 for n in ["alice", "bob", "carol", "dave"]:

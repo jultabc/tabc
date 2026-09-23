@@ -40,10 +40,10 @@ Two shells. If this works, the installation is sound.
 ```bash
 # shell 1 — start the server, register yourself
 tabd &
-tabc register --node alice --kind generic
+tabc register --node alice --kind codex
 
 # shell 2 — register before anything is sent here
-tabc register --node bob --kind generic
+tabc register --node bob --kind claude
 
 # shell 1 — send
 tabc send --sender alice --to bob --subject "hello" --body "first"
@@ -73,6 +73,8 @@ install; see the repository's guide before turning it on.
 - `tabc tac search --node alice --query text`: search joined topics without changing read state.
 
 Register each recipient before sending. tac creators must also join their topic.
+In 0.2.0, the server mints a UUID for each new tac. Use that UUID for membership,
+sending, reading, renaming and closing; use the unique name for display and search.
 Run `tabc --help` for available commands. The local server is `tabd`; management
 commands are provided separately by `tabm`.
 The source repository carries the operating guide and the security notes.
