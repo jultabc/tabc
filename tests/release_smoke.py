@@ -1,5 +1,6 @@
 """Run with an installed wheel's Python; isolated store, no notifier or tabm."""
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -24,15 +25,17 @@ def main():
             try:
                 for _ in range(100):
                     log.seek(0)
-                    first = log.readline().strip()
-                    if first:
+                    port_text = next(
+                        (line.strip() for line in log if line.strip().isdigit()), None
+                    )
+                    if port_text:
                         break
                     if proc.poll() is not None:
                         raise RuntimeError("test server exited")
                     time.sleep(.05)
                 else:
                     raise RuntimeError("test server startup timeout")
-                env["TABC_BUS_URL"] = "http://127.0.0.1:" + str(int(first))
+                env["TABC_BUS_URL"] = "http://127.0.0.1:" + str(int(port_text))
 
                 def run(*args):
                     result = subprocess.run([sys.executable, "-m", "tabus.cli", *args],
@@ -46,14 +49,20 @@ def main():
                 run("send", "--sender", "alice", "--to", "bob", "--subject", "Hello", "--body", "DM-body")
                 assert "DM-body" in run("read", "--node", "bob")
                 assert "READ" in run("sent", "--node", "alice")
-                run("tac", "create", "planning", "--node", "alice")
+                created = run("tac", "create", "planning", "--node", "alice")
+                match = re.search(
+                    r"created tac ([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}): planning",
+                    created,
+                )
+                assert match, created
+                tac_id = match.group(1)
                 for node in ("alice", "bob"):
-                    run("tac", "add", "planning", node, "--node", "alice")
-                run("send", "--sender", "alice", "--tac", "planning", "--subject", "Plan", "--body", '\uac80\uc0c9 & 100%')
+                    run("tac", "add", tac_id, node, "--node", "alice")
+                run("send", "--sender", "alice", "--tac", tac_id, "--subject", "Plan", "--body", '\uac80\uc0c9 & 100%')
                 assert '\uac80\uc0c9 & 100%' in run("tac", "search", "--node", "bob", "--query", '\uac80\uc0c9 & 100%')
                 assert "1 unread" in run("dm", "--node", "bob")
                 run("read", "--node", "bob")
-                run("send", "--sender", "bob", "--tac", "planning", "--subject", "Reply", "--body", "reply-body")
+                run("send", "--sender", "bob", "--tac", tac_id, "--subject", "Reply", "--body", "reply-body")
                 assert "reply-body" in run("read", "--node", "alice")
                 print("INSTALLED WHEEL SMOKE PASS")
             finally:

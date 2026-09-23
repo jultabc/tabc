@@ -46,6 +46,13 @@ import json
 import os
 
 from . import paths
+from .send_refusal import (  # the limits stay importable as tabus.MAX_*_BYTES
+    MAX_BODY_BYTES,
+    MAX_SUBJECT_BYTES,
+    check_send_payload,
+    unread_blocked_dm,
+    unread_blocked_tac,
+)
 import platform
 import sqlite3
 import sys
@@ -67,7 +74,7 @@ DB_PATH = os.environ.get(
 #    drifted once already — 0.1.0.post1 shipped while this said 0.1.0. Bump
 #    both together; tests/test_version_agreement.py fails the build otherwise.
 #    Do not copy the number into documentation.
-__version__ = "0.1.6"
+__version__ = "0.2.0"
 PROTOCOL_VERSION = "tabus.v1"
 
 # TTLs. Past these, a derived status counts as old.
@@ -89,7 +96,7 @@ ACTIVITY_TTL_SEC = 60  # busy/idle older than this reads as unknown
 CLAUDE_SESSIONS_DIR = os.path.expanduser("~/.claude/sessions")
 LEASE_SEC = 120  # a claim older than this becomes eligible for redelivery
 MAX_ATTEMPTS = 5  # past this the delivery is DEAD, so one poison message cannot loop
-MAX_BODY_BYTES = 65536
+# MAX_BODY_BYTES and MAX_SUBJECT_BYTES come from send_refusal, where they are checked.
 
 # 🔴 A display-only label. It assumes the local part equals the node_id, so the
 #   registered name is also the address prefix.
@@ -243,6 +250,11 @@ CREATE TABLE IF NOT EXISTS removals (
 CREATE TABLE IF NOT EXISTS tacs (
     tac_id   TEXT PRIMARY KEY,
     label      TEXT,
+    -- New ledgers start on the UUID identity scheme. CREATE IF NOT EXISTS does
+    -- not add these columns to an older table, so an existing ledger remains on
+    -- its string identifiers until the operator runs the copy-first conversion.
+    name       TEXT,
+    name_key   TEXT,
     created_at TEXT NOT NULL,
     created_by TEXT,
     -- 🔴 Closing a tac is final. A closed tac cannot reopen and refuses sends.
@@ -780,6 +792,14 @@ def migrate(con):
                 con.execute("ALTER TABLE tacs DROP COLUMN prev_tac_id")
             except sqlite3.OperationalError:
                 pass
+        # Existing ledgers without identity columns stay untouched: the conversion
+        # runs on a copy, and an operator decides when to swap it in. Fresh 0.2.0
+        # ledgers already have both columns from SCHEMA, so their index and history
+        # tables can be initialized here without converting any row.
+        if {"name", "name_key"} <= tcols:
+            from .tac_store import ensure_columns
+
+            ensure_columns(con)
         con.commit()
     # 🔴 Add tab_routes.host_id, before the early-return so live databases reach
     #    it. A live table predates the column.
@@ -1410,17 +1430,10 @@ def bus_register(
             "WHERE node_id=? AND auto_enter!=0 AND revoked_at IS NULL",
             (node_id,),
         ).rowcount
-    if revoke_route is True:
-        # Exact legacy identity only: a stale process must not revoke a newer
-        # verified route or another target. Old unverified ABA remains a
-        # mixed-version limitation until every registering client is updated.
-        revoked_self = con.execute(
-            "UPDATE tab_routes SET revoked_at=? "
-            "WHERE node_id=? AND adapter=? AND target=? "
-            "AND (host_id IS ? OR host_id IS NULL) "
-            "AND provenance_verified=0 AND revoked_at IS NULL",
-            (ts, node_id, revoke_adapter, revoke_target, revoke_host_id),
-        ).rowcount
+    # Legacy clients can report a failed capture using revoke_route. Failure to
+    # prove the current process's route is not evidence that a stored route is
+    # wrong. Keep the wire fields validated, but never revoke on that report.
+    # This neither certifies legacy routes nor restores already revoked routes.
     active_route = con.execute(
         "SELECT provenance_verified FROM tab_routes WHERE node_id=? AND revoked_at IS NULL",
         (node_id,),
@@ -1540,22 +1553,31 @@ def bus_unread_senders(con, recipient, include_tac=False):
     has_tac = any(
         r["name"] == "tac_id" for r in con.execute("PRAGMA table_info(messages)")
     )
+    tac_columns = {r["name"] for r in con.execute("PRAGMA table_info(tacs)")}
+    has_tacs = bool(tac_columns)
+    has_tac_name = "name" in tac_columns
     tac_filter = "AND m.tac_id IS NULL" if has_tac and not include_tac else ""
     scope = "m.tac_id" if has_tac else "NULL"
+    tac_join = "LEFT JOIN tacs t ON t.tac_id=m.tac_id" if has_tac and has_tacs else ""
+    tac_name = "COALESCE(MAX(t.name),m.tac_id)" if has_tac_name else scope
     if _nodes_has_owner_email(con):
-        sql = f"""SELECT m.sender_id AS sender, {scope} AS tac_id, COUNT(*) AS c,
+        sql = f"""SELECT m.sender_id AS sender, {scope} AS tac_id,
+                         {tac_name} AS tac_name, COUNT(*) AS c,
                          MAX(n.owner_email) AS owner_email,
                          MAX(n.owner_email_verified) AS owner_email_verified
                     FROM deliveries d JOIN messages m ON m.id = d.message_id
                     LEFT JOIN nodes n ON n.node_id = m.sender_id
+                    {tac_join}
                    WHERE d.recipient_id = ? AND {_unread_where()}
                      {tac_filter}
                    GROUP BY m.sender_id, {scope}
                    ORDER BY MAX(d.created_at) DESC, MAX(d.id) DESC, c DESC"""
     else:
-        sql = f"""SELECT m.sender_id AS sender, {scope} AS tac_id, COUNT(*) AS c,
+        sql = f"""SELECT m.sender_id AS sender, {scope} AS tac_id,
+                         {tac_name} AS tac_name, COUNT(*) AS c,
                          NULL AS owner_email, 0 AS owner_email_verified
                     FROM deliveries d JOIN messages m ON m.id = d.message_id
+                    {tac_join}
                    WHERE d.recipient_id = ? AND {_unread_where()}
                      {tac_filter}
                    GROUP BY m.sender_id, {scope}
@@ -1564,6 +1586,7 @@ def bus_unread_senders(con, recipient, include_tac=False):
         {
             "sender": r["sender"],
             "tac_id": r["tac_id"],
+            "tac_name": r["tac_name"],
             "count": r["c"],
             "owner_email": r["owner_email"],
             "owner_email_verified": bool(r["owner_email_verified"]),
@@ -1605,14 +1628,20 @@ def pending_split_by_tac_for_recipients(con, recipient_ids):
     one truncates the body, the other fails the send outright — and an escaping
     bug that was already fixed once should not reappear through a new field.
     """
+    has_tac_name = any(
+        r["name"] == "name" for r in con.execute("PRAGMA table_info(tacs)")
+    )
+    tac_name = "COALESCE(t.name,m.tac_id)" if has_tac_name else "m.tac_id"
+    tac_join = "LEFT JOIN tacs t ON t.tac_id=m.tac_id" if has_tac_name else ""
     rows = con.execute(
-        f"""SELECT r, tac, c, last_sender, last_subject FROM (
-              SELECT d.recipient_id AS r, m.tac_id AS tac,
+        f"""SELECT r, tac, tac_name, c, last_sender, last_subject FROM (
+              SELECT d.recipient_id AS r, m.tac_id AS tac, {tac_name} AS tac_name,
                      COUNT(*) OVER (PARTITION BY d.recipient_id, m.tac_id) AS c,
                      m.sender_id AS last_sender, m.subject AS last_subject,
                      ROW_NUMBER() OVER (PARTITION BY d.recipient_id, m.tac_id
                                         ORDER BY m.accepted_at DESC, m.rowid DESC) AS rn
                 FROM deliveries d JOIN messages m ON m.id = d.message_id
+                {tac_join}
                WHERE {_unread_where()}
             ) WHERE rn = 1""",
         list(UNREAD_STATES),
@@ -1634,7 +1663,8 @@ def pending_split_by_tac_for_recipients(con, recipient_ids):
         else:
             out[r]["tacs"].append(
                 {
-                    "tac": _san(row["tac"]),
+                    "tac": _san(row["tac_name"]),
+                    "tac_id": row["tac"],
                     "count": row["c"],
                     "last_sender": row["last_sender"],
                     "last_subject": _san(row["last_subject"]),
@@ -1904,8 +1934,24 @@ def bus_send(
     tac_id=None,
     broadcast=False,
 ):
-    if body is None or len(body.encode()) > MAX_BODY_BYTES:
-        return None, "body is missing or too large"
+    # 🔴 Payload checks come before any state lookup, so a malformed request learns
+    #    nothing about senders, tacs or unread mail.
+    refusal = check_send_payload(
+        subject,
+        body,
+        {
+            "from": sender_id,
+            "to": recipients,
+            "tac": tac_id,
+            "priority": priority,
+            "message_id": message_id,
+            "reply_to": reply_to,
+            "thread_id": thread_id,
+            "expires_at": expires_at,
+        },
+    )
+    if refusal is not None:
+        return None, refusal
     if expires_at:
         try:
             expires_at = parse_instant(expires_at).isoformat(timespec="seconds")
@@ -1944,8 +1990,17 @@ def bus_send(
         ok, reason = tac_action_allowed(con, sender_id, tac_id, "send")
         if not ok:
             return None, reason
+        # 🔴 The name a sender typed becomes the identifier here, before anything is
+        #    stored: messages carry the tac's identifier, so a later rename does not
+        #    detach them. The sentences below keep the string the sender typed.
+        _given = tac_id
+        tac_id, _refusal = tac_resolve(con, tac_id)
+        if _refusal is not None:
+            return None, _refusal
         if not _tac_exists(con, tac_id):
-            return None, f"no such tac: {tac_id}"
+            from . import tac_refusal
+
+            return None, tac_refusal.not_found(_given, f"no such tac: {_given}")
         # 🔴 A closed tac accepts no further sends. Continuing means opening a new
         #    tac and linking it.
         _crow = con.execute(
@@ -1954,13 +2009,13 @@ def bus_send(
         if _crow and _crow["closed_at"]:
             return (
                 None,
-                f"tac '{tac_id}' was closed ({_crow['closed_at']}) and accepts no sends. Open a new tac and link it.",
+                f"tac '{_given}' was closed ({_crow['closed_at']}) and accepts no sends. Open a new tac and link it.",
             )
         # 🔴 Read before send: unread messages in this tac block sending to it.
         #    Listen before speaking. Everyone sending without reading is what turns
         #    a topic into a flood.
-        #    Unread means ACCEPTED or CLAIMED — not opened. Viewing the tac
-        #    advances the member's unread and lifts the block.
+        #    Unread means ACCEPTED or CLAIMED. Catch-up advances only returned
+        #    deliveries to INJECTED; unreturned deliveries can keep the block.
         _unread = con.execute(
             "SELECT COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
             "WHERE d.recipient_id = ? AND m.tac_id = ? AND d.state IN ('ACCEPTED','CLAIMED')",
@@ -1969,12 +2024,19 @@ def bus_send(
         if _unread:
             return (
                 None,
-                f"tac '{tac_id}': {_unread} unread. Read them first"
-                f" (tabc tac show {tac_id}). Listen before speaking.",
+                unread_blocked_tac(
+                    f"tac '{_given}': {_unread} unread. Read them first"
+                    f" (tabc tac show {_given} --node {sender_id}). "
+                    f"For older messages, use tabc dm --node {sender_id} and open each message.",
+                    # 🔴 The string the sender typed, not the identifier it resolved to:
+                    #    the details name the same tac as the sentence above them.
+                    _given,
+                    _unread,
+                ),
             )
         recipients = [m for m in bus_tac_members(con, tac_id) if m != sender_id]
         if not recipients:
-            return None, f"tac '{tac_id}': no valid members once the sender is excluded"
+            return None, f"tac '{_given}': no valid members once the sender is excluded"
     if recipients == ["all"]:
         # 🔴 Removed nodes are excluded from the all fan-out, or they stay hidden
         #    from the roster while still receiving group mail.
@@ -2030,6 +2092,7 @@ def bus_send(
     # unread state must not stop its one-way event stream.
     if not tac_id and not broadcast and not sender_is_program:
         blocked = []
+        counts = []
         for r in valid:
             n = con.execute(
                 "SELECT COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
@@ -2040,11 +2103,15 @@ def bus_send(
             ).fetchone()["c"]
             if n:
                 blocked.append(f"{r} ({n})")
+                counts.append((r, n))
         if blocked:
             return (
                 None,
-                f"read their messages first: {', '.join(blocked)}. "
-                f"Open them with tabc open, then send. Listen before speaking.",
+                unread_blocked_dm(
+                    f"read their messages first: {', '.join(blocked)}. "
+                    f"Open them with tabc open, then send. Listen before speaking.",
+                    counts,
+                ),
             )
 
     mid = message_id or str(uuid.uuid4())
@@ -2367,10 +2434,25 @@ def tac_action_allowed(con, requester, tac_id, action):
     precondition only holds if it sits on the execution path rather than in a
     checklist.
 
-    action is one of 'create', 'add', 'remove', 'send', 'close', 'link'.
+    action is one of 'create', 'add', 'remove', 'send', 'close', 'link', 'rename'.
     Returns (allowed: bool, reason: str | None).
     """
     return True, None
+
+
+def tac_resolve(con, given):
+    """🔴 The one seam where a typed tac string becomes the identifier of one tac.
+
+    Every caller-facing path goes through here, so the three spellings a tac answers
+    to — its UUID, its name, and the identifier it carried before the migration —
+    are decided in one place rather than in each endpoint.
+
+    Returns (tac_id, refusal). The refusal carries a code and is a string, so a caller
+    that only prints it sees the same sentence as before.
+    """
+    from .tac_store import resolve
+
+    return resolve(con, given)
 
 
 def _tac_exists(con, tac_id):
@@ -2388,6 +2470,19 @@ def bus_tac_create(con, tac_id, label=None, by=None):
     ok, reason = tac_action_allowed(con, by, tac_id, "create")
     if not ok:
         return False, reason
+    # 🔴 After the migration the string a caller sends is the tac's NAME and the
+    #    identifier is minted in the identity store. Before it, the string is the
+    #    identifier, exactly as it was. Both states are live at once because a ledger
+    #    with existing tacs stays on the old scheme until the migration tool runs.
+    from . import tac_store
+
+    if tac_store.converted(con):
+        ok, msg, row = tac_store.create(con, tac_id, by=by, at=now_iso())
+        if ok and label:
+            con.execute("UPDATE tacs SET label=? WHERE tac_id=?", (label, row["tac_id"]))
+            msg = f"{msg} ({label})"
+        con.commit()
+        return ok, msg
     if con.execute("SELECT 1 FROM nodes WHERE node_id=?", (tac_id,)).fetchone():
         return (
             False,
@@ -2403,6 +2498,59 @@ def bus_tac_create(con, tac_id, label=None, by=None):
     return True, f"created tac: {tac_id}" + (f" ({label})" if label else "")
 
 
+def tac_scheme(con):
+    """Which identifier scheme this ledger's tacs are on.
+
+    🔴 Reported because the two states look the same from outside: a ledger before the
+    conversion serves every read and send exactly as one after it, and only create and
+    rename answer differently. Without something to look at, "we converted it" and "we
+    meant to" are the same sentence.
+    """
+    from .tac_store import converted, unconverted
+
+    if not converted(con):
+        return {"converted": False, "unconverted": None}
+    left = unconverted(con)
+    return {"converted": not left, "unconverted": len(left)}
+
+
+def bus_tac_key_mismatches(con):
+    """Tacs whose stored lookup key is not what this interpreter computes.
+
+    🔴 A row written by an interpreter that folds that name differently carries a key
+    this one would never produce, so the name is invisible to every lookup here. The
+    symptom is silence — a search returns nothing and nobody is told why — which is
+    why this is reported at startup as well as on request.
+    """
+    from .tac_store import key_mismatches
+
+    return [
+        {"tac_id": tac_id, "name": name, "stored_key": stored}
+        for tac_id, name, stored in key_mismatches(con)
+    ]
+
+
+def bus_tac_rename(con, given, name, by=None):
+    """Give a tac a different name. The identifier does not change, so every message,
+    membership and link stays attached, and the old name is recorded."""
+    from . import tac_refusal, tac_store
+
+    # 🔴 Both halves: the columns have to be there, and no row may still be on the old
+    #    scheme. Renaming a ledger that has not been converted would write a name onto a
+    #    row whose identifier is still a string.
+    if not tac_store.converted(con) or tac_store.unconverted(con):
+        return False, tac_refusal.not_converted()
+    tac_id, refusal = tac_resolve(con, given)
+    if refusal is not None:
+        return False, refusal
+    ok, reason = tac_action_allowed(con, by, tac_id, "rename")
+    if not ok:
+        return False, reason
+    ok, msg, _row = tac_store.rename(con, tac_id, name, by=by, at=now_iso())
+    con.commit()
+    return ok, msg
+
+
 def bus_tac_add(con, tac_id, node_id, by=None):
     """Add a node to a tac. Unregistered or removed nodes are rejected; a duplicate
     membership is harmless because the primary key absorbs it."""
@@ -2411,8 +2559,15 @@ def bus_tac_add(con, tac_id, node_id, by=None):
     ok, reason = tac_action_allowed(con, by, tac_id, "add")
     if not ok:
         return False, reason
-    if not _tac_exists(con, tac_id):
-        return False, f"no such tac: {tac_id} (create it first)"
+    given = tac_id
+    resolved, _refusal = tac_resolve(con, tac_id)
+    if resolved is None or not _tac_exists(con, resolved):
+        from . import tac_refusal
+
+        return False, tac_refusal.not_found(
+            tac_id, f"no such tac: {tac_id} (create it first)"
+        )
+    tac_id = resolved
     if not con.execute("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)).fetchone():
         return False, f"unregistered node: {node_id}"
     if is_removed(con, node_id):
@@ -2423,7 +2578,7 @@ def bus_tac_add(con, tac_id, node_id, by=None):
         (tac_id, node_id, now_iso(), by),
     )
     con.commit()
-    return True, f"{tac_id} ← {node_id}"
+    return True, f"{given} ← {node_id}"
 
 
 def bus_tac_remove_member(con, tac_id, node_id, by=None):
@@ -2434,19 +2589,25 @@ def bus_tac_remove_member(con, tac_id, node_id, by=None):
     ok, reason = tac_action_allowed(con, by, tac_id, "remove")
     if not ok:
         return False, reason
+    given = tac_id
+    resolved, refusal = tac_resolve(con, tac_id)
+    if refusal is not None:
+        return False, refusal
+    tac_id = resolved
     cur = con.execute(
         "DELETE FROM tac_members WHERE tac_id=? AND member_node_id=?",
         (tac_id, node_id),
     )
     con.commit()
     if cur.rowcount == 0:
-        return False, f"{node_id} is not a member of {tac_id}"
-    return True, f"{tac_id} ⊟ {node_id}"
+        return False, f"{node_id} is not a member of {given}"
+    return True, f"{given} ⊟ {node_id}"
 
 
 def bus_tac_members(con, tac_id, include_removed=False):
     """Member node_ids for a tac. With include_removed=False, removed nodes are
     excluded, which is what send resolution wants."""
+    tac_id = tac_resolve(con, tac_id)[0] or tac_id
     if include_removed:
         rows = con.execute(
             "SELECT member_node_id FROM tac_members WHERE tac_id=? "
@@ -2463,7 +2624,7 @@ def bus_tac_members(con, tac_id, include_removed=False):
     return [r["member_node_id"] for r in rows]
 
 
-def bus_tac_mark_read(con, node_id, tac_id):
+def bus_tac_mark_read(con, node_id, tac_id, message_ids=None):
     """Record that this node has seen this tac.
 
     Unopened tac deliveries (ACCEPTED or CLAIMED) advance to INJECTED. That is
@@ -2473,13 +2634,24 @@ def bus_tac_mark_read(con, node_id, tac_id):
     🔴 An observer who is not a member has no deliveries in this tac, so the
        rowcount is zero and nothing changes. Supervision stays read-only.
 
+    When message_ids is supplied, only those returned messages may advance.
+    An empty selection changes nothing. This never records READ.
     Returns the number of deliveries marked.
     """
+    tac_id = tac_resolve(con, tac_id)[0] or tac_id
+    scope = ""
+    params = [node_id, tac_id]
+    if message_ids is not None:
+        ids = list(dict.fromkeys(message_ids))
+        if not ids:
+            return 0
+        scope = " AND message_id IN (" + ",".join("?" for _ in ids) + ")"
+        params.extend(ids)
     cur = con.execute(
         "UPDATE deliveries SET state='INJECTED' "
         "WHERE recipient_id = ? AND state IN ('ACCEPTED','CLAIMED') "
-        "AND message_id IN (SELECT id FROM messages WHERE tac_id = ?)",
-        (node_id, tac_id),
+        "AND message_id IN (SELECT id FROM messages WHERE tac_id = ?)" + scope,
+        params,
     )
     con.commit()
     return cur.rowcount
@@ -2487,7 +2659,10 @@ def bus_tac_mark_read(con, node_id, tac_id):
 
 def bus_tac_list(con):
     """Every tac with its member count, excluding removed nodes, and its label."""
-    rows = con.execute("""SELECT g.tac_id, g.label, g.created_at, g.created_by,
+    name = "g.name" if {"name"} <= {
+        r["name"] for r in con.execute("PRAGMA table_info(tacs)")
+    } else "NULL"
+    rows = con.execute(f"""SELECT g.tac_id, {name} AS name, g.label, g.created_at, g.created_by,
                   (SELECT COUNT(*) FROM tac_members m
                      WHERE m.tac_id = g.tac_id
                        AND m.member_node_id NOT IN
@@ -2509,6 +2684,7 @@ def bus_tac_messages(con, tac_id, limit=50):
     #    every caller passes through. A negative LIMIT means unlimited in SQLite,
     #    so one leaking through would defeat the ceiling enforced at the boundary
     #    and dump the whole table.
+    tac_id = tac_resolve(con, tac_id)[0] or tac_id
     limit = max(1, int(limit))
     # 🔴 Timestamps here have second precision, so two messages sent in the same
     #    second tie. Breaking the tie by rowid makes "later on top" a contract that
@@ -2535,6 +2711,11 @@ def bus_tac_close(con, tac_id, summary=None, by=None):
     ok, reason = tac_action_allowed(con, by, tac_id, "close")
     if not ok:
         return False, reason
+    given = tac_id
+    resolved, refusal = tac_resolve(con, tac_id)
+    if refusal is not None:
+        return False, refusal
+    tac_id = resolved
     # 🔴 Closing is atomic: the UPDATE applies only while closed_at is NULL. Two
     #    concurrent closes on separate connections give the first a rowcount of 1
     #    and the second 0, so a second summary cannot overwrite the first.
@@ -2548,9 +2729,9 @@ def bus_tac_close(con, tac_id, summary=None, by=None):
         # A rowcount of 0 means either no such tac or already closed. The response
         # distinguishes them rather than staying silent.
         if not _tac_exists(con, tac_id):
-            return False, f"no such tac: {tac_id}"
-        return False, f"tac already closed: {tac_id} — it cannot reopen"
-    return True, f"closed tac: {tac_id}" + (f" — {summary}" if summary else "")
+            return False, f"no such tac: {given}"
+        return False, f"tac already closed: {given} — it cannot reopen"
+    return True, f"closed tac: {given}" + (f" — {summary}" if summary else "")
 
 
 def bus_tac_link(con, child_tac, parent_tac, by=None):
@@ -2570,23 +2751,29 @@ def bus_tac_link(con, child_tac, parent_tac, by=None):
     ok, reason = tac_action_allowed(con, by, child_tac, "link")
     if not ok:
         return False, reason
+    child_given, parent_given = child_tac, parent_tac
+    child_tac = tac_resolve(con, child_tac)[0] or child_tac
+    parent_tac = tac_resolve(con, parent_tac)[0] or parent_tac
+    if child_tac == parent_tac:
+        return False, "a tac cannot link to itself"
     if not _tac_exists(con, child_tac):
-        return False, f"no such tac (child): {child_tac}"
+        return False, f"no such tac (child): {child_given}"
     if not _tac_exists(con, parent_tac):
-        return False, f"no such tac (parent): {parent_tac}"
+        return False, f"no such tac (parent): {parent_given}"
     con.execute(
         "INSERT INTO tac_links(child_tac, parent_tac, linked_at, linked_by) "
         "VALUES(?,?,?,?) ON CONFLICT(child_tac, parent_tac) DO NOTHING",
         (child_tac, parent_tac, now_iso(), by),
     )
     con.commit()
-    return True, f"linked: {child_tac} continues from {parent_tac}"
+    return True, f"linked: {child_given} continues from {parent_given}"
 
 
 def bus_tac_links(con, tac_id):
     """A tac's links, read-only: parents it continues from, and children that
     continue from it. Direction, forks, and merges are all read out of the
     junction table."""
+    tac_id = tac_resolve(con, tac_id)[0] or tac_id
     parents = [
         r["parent_tac"]
         for r in con.execute(

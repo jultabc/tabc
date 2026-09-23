@@ -24,13 +24,16 @@ jobs:
       - name: Install Python package
         run: python3 -m pip install -e .
 
-      - name: Run Python tests
-        run: for test_file in tests/test_*.py; do python3 "$test_file" || exit 1; done
+      - name: Run core Python tests
+        run: >-
+          for test_file in tests/test_*.py; do
+          [ "$test_file" = tests/test_mcp_stdio.py ] || python3 "$test_file" || exit 1;
+          done
 
       - name: Install optional MCP adapter
         run: python3 -m pip install -e '.[mcp]'
 
-      - name: Run MCP transport tests with the SDK installed
+      - name: Run MCP stdio test with the SDK installed
         run: python3 tests/test_mcp_stdio.py
 
       - name: Set up Java

@@ -15,8 +15,17 @@ points import directly from this checkout. A source edit is visible to the next
 process without reinstalling. Restart a running daemon or doorbell after changing
 code it imports, and rerun the install when `pyproject.toml` changes.
 
-The tests need nothing else. HTTP tests start their own daemon on an isolated
-port, point it at a temporary `TABC_HOME`, and register the node keys they need.
+HTTP tests start their own daemon on an isolated port, point it at a temporary
+`TABC_HOME`, and register the node keys they need. The MCP stdio test needs the
+optional SDK. Run the core tests first, then install the extra and run that test:
+
+```bash
+for f in tests/test_*.py; do
+  [ "$f" = tests/test_mcp_stdio.py ] || python3 "$f" || exit 1
+done
+pip install -e '.[mcp]'
+python3 tests/test_mcp_stdio.py
+```
 There is no shared token to export and no daemon to start first.
 
 To poke at the bus by hand, start one yourself:

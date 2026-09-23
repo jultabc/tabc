@@ -19,11 +19,13 @@ shared secret — see _authorized.
 
 import json
 import os
+import socket
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import nodekey  # base58 signature decoding, for verifying /send
+from .send_refusal import declared_length, request_length_refusal
 from . import bus as tabus  # the store; kept under its old name so call sites read the same
 
 HOLD_SEC = 25  # longest a long-poll waits
@@ -32,6 +34,26 @@ POLL_TICK = 0.5  # how often a waiting long-poll re-checks
 #    lifetime of a captured request: sign it, and it is replayable only within this
 #    window. Kept small; a localhost/LAN bus has near-zero clock skew.
 REQUEST_AUTH_WINDOW_SEC = 300
+# 🔴 Test candidates, not confirmed values.
+#    A request over MAX_REQUEST_BYTES is still refused. Its body is read and discarded up
+#    to DRAIN_MAX_BYTES within DRAIN_SEC first, so a client still sending it is reading
+#    when the 413 arrives. Over DRAIN_MAX_BYTES, or past DRAIN_SEC, the client may get a
+#    reset instead.
+DRAIN_MAX_BYTES = 16 * 1024 * 1024
+DRAIN_SEC = 5
+# Longest one socket read may wait for data. A long-poll hold is not a read.
+SOCKET_IDLE_SEC = 3
+# 🔴 Test candidate, not a confirmed value. The whole body of an accepted request must arrive
+#    within this, on a monotonic clock. SOCKET_IDLE_SEC bounds one read; this bounds the
+#    request, so a sender that keeps trickling bytes no longer holds a thread indefinitely.
+#    It is not applied to a long-poll hold or to writing a response.
+BODY_READ_SEC = 30
+# 🔴 What a started daemon prints, once its socket is bound. A constant because a test
+#    reads this line as the proof that the process it spawned holds the port: the same
+#    sentence written out in two places would drift the first time one of them changed
+#    (woo).
+READY_LINE = ("[tabd] http://{bind}:{port} listening. "
+              "Every request is authenticated by node-key signature.")
 
 
 def stamp_mailbox_open(con, node: str) -> None:
@@ -59,6 +81,9 @@ def wire_message(m: dict) -> dict:
 
 class BusHandler(BaseHTTPRequestHandler):
     server_version = "tabd/1.0"
+    # 🔴 StreamRequestHandler applies this to the socket. A read that waits longer raises,
+    #    and the request is dropped: a stalled body no longer holds a thread.
+    timeout = SOCKET_IDLE_SEC
 
     def setup(self) -> None:
         self._db_connections = []
@@ -86,9 +111,120 @@ class BusHandler(BaseHTTPRequestHandler):
         """The request body bytes, read once and cached. Signature verification and
         JSON parsing both need them, and rfile can be read only once."""
         if getattr(self, "_raw_cache", None) is None:
-            n = int(self.headers.get("Content-Length") or 0)
-            self._raw_cache = self.rfile.read(n) if n else b""
+            self._raw_cache = self._read_declared_body()[0]  # only the whole body reaches here
         return self._raw_cache
+
+    def _read_declared_body(self):
+        """(bytes read, declared length, how it ended: "whole", "timeout" or "short").
+
+        🔴 One recv at a time (read1), each waiting at most the idle limit or the time left,
+        so the whole body is bounded in time as well as in size. A body that ends early is
+        "short": the signature does not catch it, because it is verified over the bytes that
+        arrived, so a request declaring more than it sends was stored (jiso, jack M3)."""
+        # 🔴 Parsed the same way as the length check; int() on the raw header raised on
+        #    more than 4,300 digits, including a long run of zeros that the check accepts as 0.
+        declared = declared_length(self.headers.get_all("Content-Length"))[1] or 0
+        chunks, left, deadline = [], declared, time.monotonic() + BODY_READ_SEC
+        try:
+            while left > 0:
+                wait = deadline - time.monotonic()
+                if wait <= 0:
+                    return b"".join(chunks), declared, "timeout"
+                self.connection.settimeout(min(self.timeout, wait))
+                try:
+                    chunk = self.rfile.read1(left)
+                except (socket.timeout, BlockingIOError):
+                    # 🔴 The shortened wait ran out, which is this limit rather than an idle
+                    #    stall. Without this the timeout left the request with no answer at all.
+                    #    Only a wait that expired counts: a reset connection is not a slow one.
+                    if time.monotonic() >= deadline:
+                        return b"".join(chunks), declared, "timeout"
+                    raise
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                left -= len(chunk)
+        finally:
+            self.connection.settimeout(self.timeout)
+        return b"".join(chunks), declared, "whole" if left == 0 else "short"
+
+    def _refused_body_read(self) -> bool:
+        """Read the declared body, and answer 408 when it did not all arrive in time.
+
+        🔴 Runs before _authorized, which is what reads the body today. Nothing is stored:
+        the request never reaches bus_send."""
+        body, declared, ending = self._read_declared_body()
+        # 🔴 A partial body is not the request body. Caching it empty keeps a later reader from
+        #    treating what did arrive as the whole thing.
+        self._raw_cache = body if ending == "whole" else b""
+        if ending == "whole":
+            return False
+        self.close_connection = True
+        if ending == "timeout":
+            self._json(
+                408,
+                {
+                    "error": "request body took too long",
+                    "code": "REQUEST_TIMEOUT",
+                    "message": f"the request body did not arrive within {BODY_READ_SEC} seconds",
+                    "details": {"limit": BODY_READ_SEC, "unit": "seconds"},
+                    "retry": "as_is",
+                },
+            )
+            return True
+        # 🔴 The body ended before Content-Length. This is not a timeout, and the signature does
+        #    not catch it, so the request is refused here, before anything is stored.
+        self._json(
+            400,
+            {
+                "error": "request body is shorter than Content-Length",
+                "code": "REQUEST_INCOMPLETE",
+                "message": f"the request body ended after {len(body)} of {declared} declared bytes",
+                "details": {"bytes": len(body), "declared": declared, "unit": "bytes"},
+                "retry": "as_is",
+            },
+        )
+        return True
+
+    def _refused_length(self) -> bool:
+        """Answer and return True when the declared request length is refused.
+
+        🔴 This runs before _authorized, because signature verification reads the whole
+        body. Without it a registered node could make the daemon hold any Content-Length
+        in memory, and a negative length would block the thread reading until EOF.
+        """
+        refused = request_length_refusal(self.headers.get_all("Content-Length"))
+        if refused is None:
+            return False
+        status, body = refused
+        size = body["details"].get("bytes")  # absent when the length is too long to convert
+        if status == 413 and size is not None and size <= DRAIN_MAX_BYTES:
+            self._discard_body(size)
+        self.close_connection = True
+        self._json(status, body)
+        return True
+
+    def _discard_body(self, size: int) -> None:
+        """Read and drop up to size bytes of the request body, for at most DRAIN_SEC.
+
+        🔴 Each pass is one socket read (read1), with the timeout cut to the time left.
+        read(n) would keep reading until n bytes arrive, so a slow sender could hold it
+        past DRAIN_SEC."""
+        left, deadline = size, time.monotonic() + DRAIN_SEC
+        try:
+            while left > 0:
+                wait = deadline - time.monotonic()
+                if wait <= 0:
+                    break
+                self.connection.settimeout(min(self.timeout, wait))
+                chunk = self.rfile.read1(min(65536, left))
+                if not chunk:
+                    break
+                left -= len(chunk)
+        except OSError:  # includes the timeout; the refusal is sent either way
+            pass
+        finally:
+            self.connection.settimeout(self.timeout)
 
     def _authorized(self) -> bool:
         """Authenticate the request by node-key signature. There is no shared token.
@@ -171,12 +307,19 @@ class BusHandler(BaseHTTPRequestHandler):
 
     def _json(self, code: int, obj) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("X-Robots-Tag", "noindex")
-        self.end_headers()
-        self.wfile.write(body)
+        # 🔴 A socket timeout bounds a whole sendall, not the pause between sends. With the
+        #    idle timeout left on, a large response to a slow reader was cut off (678,244 of
+        #    11,809,904 bytes at 1 s). Writes keep no time limit, as before the idle timeout.
+        self.connection.settimeout(None)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Robots-Tag", "noindex")
+            self.end_headers()
+            self.wfile.write(body)
+        finally:
+            self.connection.settimeout(self.timeout)
 
     def _body(self) -> dict:
         raw = self._raw_body()  # cached; _authorized already read the stream
@@ -189,6 +332,8 @@ class BusHandler(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self):
+        if self._refused_length() or self._refused_body_read():
+            return
         path, _, query = self.path.partition("?")
         q = dict(kv.split("=", 1) for kv in query.split("&") if "=" in kv)
 
@@ -251,7 +396,11 @@ class BusHandler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": "node is required"})
             if node != self._acting():
                 return self._json(403, {"error": "a node may read only its own mailbox"})
-            limit = min(int(q.get("limit", 50)), 200)
+            # 🔴 int() outside try raised in the handler: no response for limit=abc or 4,301 digits.
+            try:
+                limit = min(int(q.get("limit", 50)), 200)
+            except ValueError:
+                return self._json(400, {"error": "limit must be an integer"})
             con = self._connect()
             stamp_mailbox_open(con, node)
             titles = tabus.list_unread_titles(con, node, limit=limit)
@@ -281,7 +430,10 @@ class BusHandler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": "node is required"})
             if node != self._acting():
                 return self._json(403, {"error": "a node may pull only its own mailbox"})
-            limit = min(int(q.get("limit", 10)), 50)
+            try:
+                limit = min(int(q.get("limit", 10)), 50)
+            except ValueError:
+                return self._json(400, {"error": "limit must be an integer"})
             deadline = time.time() + HOLD_SEC
             con = self._connect()
             msgs, quarantined = [], []
@@ -309,8 +461,22 @@ class BusHandler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "token"})
             con = self._connect()
             groups = tabus.bus_tac_list(con)
+            scheme = tabus.tac_scheme(con)
             con.close()
-            return self._json(200, {"tacs": groups})
+            # 🔴 `identifiers` says which scheme this ledger is on. A caller that finds a
+            #    tac by name here needs to know whether the name it reads is a display
+            #    name or the identifier itself.
+            return self._json(200, {"tacs": groups, "identifiers": scheme})
+
+        if path == "/tac_check":
+            # 🔴 Which tacs carry a lookup key this interpreter would not produce.
+            #    Read-only, and it names tacs only — the same scope as /tacs.
+            if not self._authorized():
+                return self._json(401, {"error": "token"})
+            con = self._connect()
+            mismatched = tabus.bus_tac_key_mismatches(con)
+            con.close()
+            return self._json(200, {"mismatched": mismatched})
 
         if path == "/tac_search":
             if not self._authorized():
@@ -349,6 +515,12 @@ class BusHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 return self._json(400, {"error": "limit must be an integer"})
             con = self._connect()
+            # 🔴 Designation is by identifier. On a converted ledger a name is refused
+            #    here rather than guessed at, and the refusal carries TAC_ID_INVALID.
+            gid, refusal = tabus.tac_resolve(con, gid)
+            if refusal is not None:
+                con.close()
+                return self._json(400, {"error": str(refusal), **refusal.fields()})
             # 🔴 A missing tac answers 200 with exists:false, not 404.
             #    Using 404 for "no such tac" made a client conclude the endpoint itself
             #    was not deployed yet, because 404 then carried two meanings: no route,
@@ -370,18 +542,27 @@ class BusHandler(BaseHTTPRequestHandler):
             if catch_up_node and catch_up_node != self._acting():
                 con.close()
                 return self._json(403, {"error": "a node may catch up only itself"})
+            messages = tabus.bus_tac_messages(con, gid, limit=limit)
             marked = 0
             if exists and catch_up_node:
-                marked = tabus.bus_tac_mark_read(con, catch_up_node, gid)
+                marked = tabus.bus_tac_mark_read(
+                    con, catch_up_node, gid, message_ids=[m["id"] for m in messages]
+                )
+            has_name = "name" in {
+                row[1] for row in con.execute("PRAGMA table_info(tacs)")
+            }
             crow = con.execute(
-                "SELECT closed_at, close_summary FROM tacs WHERE tac_id=?", (gid,)
+                f"SELECT closed_at, close_summary, {'name' if has_name else 'NULL AS name'} "
+                "FROM tacs WHERE tac_id=?",
+                (gid,),
             ).fetchone()
             resp = {
                 "tac": gid,
+                "name": crow["name"] if crow else None,
                 "exists": exists,
                 "marked_read": marked,
                 "members": tabus.bus_tac_members(con, gid),
-                "messages": tabus.bus_tac_messages(con, gid, limit=limit),
+                "messages": messages,
                 "links": tabus.bus_tac_links(con, gid),
                 "closed_at": crow["closed_at"] if crow else None,
                 "close_summary": crow["close_summary"] if crow else None,
@@ -392,6 +573,8 @@ class BusHandler(BaseHTTPRequestHandler):
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
+        if self._refused_length() or self._refused_body_read():
+            return
         if not self._authorized():
             return self._json(401, {"error": "token"})
         path, _, query = self.path.partition("?")
@@ -544,7 +727,12 @@ class BusHandler(BaseHTTPRequestHandler):
             )
             if mid is None:
                 con.close()
-                return self._json(400, {"error": info})
+                # 🔴 `error` stays the sentence older clients read. A coded refusal adds
+                #    code, message, details and retry next to it; the status stays 400.
+                refused = {"error": info}
+                if hasattr(info, "fields"):
+                    refused.update(info.fields())
+                return self._json(400, refused)
             pending = {
                 p["recipient"]: p["pending"]
                 for p in tabus.bus_pending_counts(con, data.get("from", ""))
@@ -622,14 +810,14 @@ class BusHandler(BaseHTTPRequestHandler):
                 con, data.get("tac", ""), data.get("label"), data.get("by")
             )
             con.close()
-            return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
+            return self._tac_answer(ok, msg)
 
         elif path == "/tac_add":
             ok, msg = tabus.bus_tac_add(
                 con, data.get("tac", ""), data.get("node", ""), data.get("by")
             )
             con.close()
-            return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
+            return self._tac_answer(ok, msg)
 
         elif path == "/tac_remove":
             # Drop a member, not the tac. Removing someone absent is an error, not a
@@ -638,7 +826,18 @@ class BusHandler(BaseHTTPRequestHandler):
                 con, data.get("tac", ""), data.get("node", ""), data.get("by")
             )
             con.close()
-            return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
+            return self._tac_answer(ok, msg)
+
+        elif path == "/tac_rename":
+            # 🔴 Give a tac a different name. The identifier does not change, so every
+            #    message, membership and link stays attached, and the previous name is
+            #    recorded. Refusals carry a code: TAC_NOT_FOUND, TAC_NAME_TAKEN,
+            #    TAC_NAME_INVALID, TAC_NOT_CONVERTED.
+            ok, msg = tabus.bus_tac_rename(
+                con, data.get("tac", ""), data.get("name", ""), data.get("by")
+            )
+            con.close()
+            return self._tac_answer(ok, msg)
 
         elif path == "/tac_close":
             # 🔴 Close a tac. Closing is final. Already closed or missing is rejected.
@@ -646,7 +845,7 @@ class BusHandler(BaseHTTPRequestHandler):
                 con, data.get("tac", ""), data.get("summary"), data.get("by")
             )
             con.close()
-            return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
+            return self._tac_answer(ok, msg)
 
         elif path == "/tac_link":
             # 🔴 Link tacs: a child continues from a parent. Direction, forks, and merges
@@ -655,13 +854,26 @@ class BusHandler(BaseHTTPRequestHandler):
                 con, data.get("child", ""), data.get("parent", ""), data.get("by")
             )
             con.close()
-            return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
+            return self._tac_answer(ok, msg)
 
         else:
             con.close()
             return self._json(404, {"error": "not found"})
         con.close()
         return self._json(code, {"ok": ok, "msg": msg})
+
+    def _tac_answer(self, ok, msg):
+        """One answer shape for every tac write.
+
+        🔴 A refusal that carries one of the tac codes answers 400 with that code beside
+        the sentence; anything else keeps the 409 these endpoints have always answered.
+        The status is what a client branches on, so the two kinds stay apart.
+        """
+        body = {"ok": ok, "msg": msg}
+        if ok or not hasattr(msg, "fields"):
+            return self._json(200 if ok else 409, body)
+        body.update(msg.fields())
+        return self._json(400, body)
 
     def log_message(self, fmt, *args):  # noqa: N802
         print(f"[tabd] {self.address_string()} {fmt % args}", flush=True)
@@ -675,6 +887,29 @@ def init_extras() -> None:
     con.execute("""CREATE TABLE IF NOT EXISTS mailbox_opens(
                        node TEXT PRIMARY KEY, opened_at TEXT NOT NULL)""")
     con.commit()
+    # 🔴 Reported at startup because the symptom is silence: a tac whose stored key
+    #    this interpreter would not produce answers no lookup, and nothing else says
+    #    so. One line here means the next restart surfaces it; `tabc tac check` names
+    #    the rows. Reporting only — no row is written, and the bus starts either way.
+    # 🔴 One line saying which scheme the tacs are on. The two states serve reads and
+    #    sends identically, so without this nobody can tell a converted ledger from one
+    #    that was going to be converted.
+    scheme = tabus.tac_scheme(con)
+    if scheme["converted"]:
+        print("[tabd] tac identifiers: UUID", flush=True)
+    elif scheme["unconverted"]:
+        print(f"[tabd] tac identifiers: {scheme['unconverted']} tac(s) still on the old "
+              "string scheme; run python -m tabus.tac_migration to convert", flush=True)
+    else:
+        print("[tabd] tac identifiers: strings; run python -m tabus.tac_migration to "
+              "put this ledger on UUIDs", flush=True)
+    mismatched = tabus.bus_tac_key_mismatches(con)
+    if mismatched:
+        print(
+            f"[tabd] {len(mismatched)} tac(s) carry a name key this interpreter does not "
+            f"produce; they answer no lookup. Names: tabc tac check",
+            flush=True,
+        )
     con.close()
 
 
@@ -699,11 +934,15 @@ def main():
     )
     a = ap.parse_args()
     init_extras()
-    print(
-        f"[tabd] http://{a.bind}:{a.port} listening. Every request is authenticated by node-key signature.",
-        flush=True,
-    )
-    ThreadingHTTPServer((a.bind, a.port), BusHandler).serve_forever()
+    # 🔴 The socket is taken here, and the line below is printed after that. Printed
+    #    before, it announced an intention: a bind that then failed left a log saying the
+    #    daemon was listening when it never did, and anything reading that line as a
+    #    readiness signal would be reading it from a process that does not hold the port.
+    #    The port comes from the socket rather than from the argument, so it is the port
+    #    actually bound.
+    server = ThreadingHTTPServer((a.bind, a.port), BusHandler)
+    print(READY_LINE.format(bind=a.bind, port=server.server_address[1]), flush=True)
+    server.serve_forever()
 
 
 if __name__ == "__main__":

@@ -207,7 +207,7 @@ stored id=<uuid>
 |---|---|
 | `stored id=` | the server allocated the id and stored the message |
 | `stored for:` | which recipients it was actually stored for |
-| `N pending` | that node's **total** unread — not a receipt for this message |
+| `N pending` | that recipient's unread from this sender — not a receipt for this message |
 
 Read `stored for:` every time. A request is not a delivery, and the exit code
 will not catch the common mistake: if *every* recipient is unregistered the
@@ -220,6 +220,42 @@ can create a second message.
 
 ---
 
+## Refusal codes
+
+tabd returns a stable `code`, a plain `message`, structured `details`, and a
+`retry` instruction for requests it can reject with certainty.
+
+| Code | Meaning |
+|---|---|
+| `FIELD_TYPE_INVALID` | subject or body is not a JSON string |
+| `FIELD_ENCODING_INVALID` | a text field cannot be encoded as UTF-8 |
+| `BODY_MISSING` | body is absent or null |
+| `BODY_EMPTY` | body is empty or whitespace only |
+| `BODY_TOO_LARGE` | body exceeds 65,536 UTF-8 bytes |
+| `SUBJECT_EMPTY` | subject is empty or whitespace only |
+| `SUBJECT_TOO_LARGE` | subject exceeds 1,024 UTF-8 bytes |
+| `REQUEST_LENGTH_INVALID` | `Content-Length` is invalid or conflicting |
+| `REQUEST_TOO_LARGE` | HTTP request body exceeds 524,288 bytes |
+| `REQUEST_TIMEOUT` | the declared request body did not arrive within 30 seconds |
+| `REQUEST_INCOMPLETE` | the connection ended before the declared body length arrived |
+| `UNREAD_BLOCKED` | read-before-send is blocking this DM or TAC send |
+| `TAC_ID_INVALID` | a TAC operation requires a canonical lowercase UUID |
+| `TAC_NOT_FOUND` | no TAC matches the supplied identifier |
+| `TAC_NAME_TAKEN` | the folded name or a reserved legacy identifier is already used |
+| `TAC_NAME_INVALID` | the TAC name violates the name rules |
+| `TAC_NOT_CONVERTED` | a partially converted ledger still contains string TAC IDs |
+
+`retry=never` means change the request. `retry=after_condition` means satisfy the
+reported condition first. `retry=as_is` means the same request may be tried again,
+but a write that lost its response must first be checked by message ID. A timeout,
+connection loss, 5xx response, or unusable response without a top-level server
+`code` is not a definite refusal. Its result is `UNKNOWN` for writes.
+
+Sizes are the UTF-8 bytes actually sent. Text is not normalized before counting.
+The same visible text can therefore use different byte counts in NFC and NFD.
+
+---
+
 ## Terminology
 
 | Term | Means |
@@ -228,7 +264,8 @@ can create a second message.
 | route | the terminal an alarm types into. A node can have none |
 | dm | a message addressed to named recipients (`send --to`) |
 | tac | a named topic. Members receive everything posted to it |
-| tac id | the string that addresses a tac, chosen at `tac create`. A `--label` is display only and never addresses it |
+| tac name | a unique display and search name. It can change |
+| tac id | a canonical UUID minted by the server. It addresses the tac and does not change when the name changes |
 | program | a send-only node. It claims no terminal and is refused as a recipient |
 
 ---
@@ -255,10 +292,10 @@ Two shells, start to finish. If this passes, the installation is sound.
 ```bash
 # shell 1
 tabd &
-tabc register --node alice --kind generic
+tabc register --node alice --kind codex
 
 # shell 2 — register before anything is sent to bob
-tabc register --node bob --kind generic
+tabc register --node bob --kind claude
 
 # shell 1
 tabc send --sender alice --to bob --subject "hello" --body "first"

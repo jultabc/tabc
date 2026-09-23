@@ -65,8 +65,8 @@ def accept_call(_method, _path, payload, node=None):
         "auto_enter_policy": "preserve-same-route",
         "msg": f"registered, route={payload.get('adapter')}",
         "auto_enter": payload.get("auto_enter"),
-        "route_active": payload.get("revoke_route") is True,
-        "route_provenance_verified": payload.get("revoke_route") is True,
+        "route_active": True,
+        "route_provenance_verified": True,
     }
 
 
@@ -108,12 +108,9 @@ args = tabc.build_parser().parse_args(
 code, rejected_output = run_cli(args)
 check("a rejected inherited route registers normally", code is None)
 check(
-    "a rejected inherited route asks for an exact old-route revoke",
+    "a rejected inherited route never asks an older daemon to revoke a route",
     len(cli_calls) == 1
-    and cli_calls[0][0].get("revoke_route") is True
-    and cli_calls[0][0].get("revoke_adapter") == "iterm2"
-    and cli_calls[0][0].get("revoke_target") == "STALE-CLI-PANE"
-    and cli_calls[0][0].get("revoke_host_id") == "CLI-HOST",
+    and not any(key.startswith("revoke_") for key in cli_calls[0][0]),
 )
 check(
     "a preserved verified route is reported instead of pull-only guidance",
@@ -179,14 +176,26 @@ args = tabc.build_parser().parse_args(
 code, rejected_takeover_output = run_cli(args)
 check("rejected provenance still registers when take-route was requested", code is None)
 check(
-    "rejected provenance prioritizes revocation over an impossible takeover",
+    "rejected provenance requests neither revocation nor takeover",
     len(cli_calls) == 1
-    and cli_calls[0][0].get("revoke_route") is True
+    and "revoke_route" not in cli_calls[0][0]
     and "take_route" not in cli_calls[0][0],
 )
 check(
     "an impossible requested takeover is reported instead of silently dropped",
     "takeover was not attempted" in rejected_takeover_output,
+)
+cli_calls.clear()
+auto_args = tabc.build_parser().parse_args(
+    ["register", "--node", "hu", "--kind", "codex", "--auto-enter", "on"]
+)
+code, auto_output = run_cli(auto_args)
+check("failed route proof still refuses automatic Enter", code == 2)
+check("failed automatic Enter sends no registration or revocation", cli_calls == [])
+check(
+    "automatic Enter refusal explains the connection failure without denying iTerm usage",
+    "could not verify its connection" in auto_output
+    and "Registration was not sent; existing routes are unchanged" in auto_output,
 )
 tabc._capture_route = lambda: ("iterm2", "CLI-PANE")
 

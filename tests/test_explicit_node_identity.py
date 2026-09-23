@@ -120,6 +120,13 @@ def tac_creator(tac):
     return row[0] if row else None
 
 
+def tac_id_by_name(name):
+    con = sqlite3.connect(DB_PATH)
+    row = con.execute("SELECT tac_id FROM tacs WHERE name=?", (name,)).fetchone()
+    con.close()
+    return row[0] if row else None
+
+
 def removal_actor(node, mode):
     con = sqlite3.connect(DB_PATH)
     row = con.execute(
@@ -293,6 +300,15 @@ try:
         tac_create_ok and "created" in tac_create_output,
         tac_create_output.strip(),
     )
+    identity_tac = tac_id_by_name("identity")
+    check(
+        "fresh daemon creates a canonical UUID tac",
+        bool(identity_tac and re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            identity_tac,
+        )),
+        str(identity_tac),
+    )
     os.environ["TABC_NODE"] = "alice"
     tac_env_create_ok, tac_env_create_output = run(
         tabc.fn_tac,
@@ -305,10 +321,11 @@ try:
         ),
     )
     os.environ.pop("TABC_NODE", None)
+    env_identity_tac = tac_id_by_name("env-identity")
     check(
         "tac mutation records TABC_NODE as the audit actor",
-        tac_env_create_ok and tac_creator("env-identity") == "alice",
-        f"created_by={tac_creator('env-identity')} output={tac_env_create_output.strip()}",
+        tac_env_create_ok and tac_creator(env_identity_tac) == "alice",
+        f"created_by={tac_creator(env_identity_tac)} output={tac_env_create_output.strip()}",
     )
     tac_list_ok, tac_list_output = run(
         tabc.fn_tac,
@@ -323,7 +340,7 @@ try:
         tabc.fn_tac,
         args(
             action="add",
-            tac="identity",
+            tac=identity_tac,
             member="alice",
             node="alice",
             by=None,
@@ -331,14 +348,14 @@ try:
     )
     check(
         "tac add keeps alice identity",
-        tac_add_ok and "identity" in tac_add_output and "alice" in tac_add_output,
+        tac_add_ok and identity_tac in tac_add_output and "alice" in tac_add_output,
         tac_add_output.strip(),
     )
     tac_add_bob_ok, tac_add_bob_output = run(
         tabc.fn_tac,
         args(
             action="add",
-            tac="identity",
+            tac=identity_tac,
             member="bob",
             node="alice",
             by=None,
@@ -349,7 +366,7 @@ try:
         tac_add_bob_ok and "bob" in tac_add_bob_output,
         tac_add_bob_output.strip(),
     )
-    tac_message_id = send_to_tac("bob", "identity", "observe only", "tac body")
+    tac_message_id = send_to_tac("bob", identity_tac, "observe only", "tac body")
     check(
         "tac delivery starts unread",
         delivery_state(tac_message_id) == "ACCEPTED",
@@ -358,7 +375,7 @@ try:
     os.environ["TABC_NODE"] = "alice"
     tac_observe_ok, tac_observe_output = run(
         tabc.fn_tac,
-        args(action="show", tac="identity", limit=20, node=None),
+        args(action="show", tac=identity_tac, limit=20, node=None),
     )
     os.environ.pop("TABC_NODE", None)
     check(
@@ -371,7 +388,7 @@ try:
     )
     tac_show_ok, tac_show_output = run(
         tabc.fn_tac,
-        args(action="show", tac="identity", limit=20, node="alice"),
+        args(action="show", tac=identity_tac, limit=20, node="alice"),
     )
     check(
         "tac show --node alice signs as alice",

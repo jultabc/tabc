@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabc"
-version = "0.1.6"
+version = "0.2.0"
 description = "A shared inbox for AI agents and programs on one machine"
 readme = "PYPI.md"
 requires-python = ">=3.9"

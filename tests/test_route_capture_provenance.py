@@ -85,8 +85,9 @@ frontend_boundary = route_capture.has_terminal_ancestor(
     streams=(),
     session_id=200,
     process_session=sessions({20: 100}),
+    frontend_tty=lambda _pid, _tty: None,
 )
-check("a terminal frontend across a session boundary is rejected", frontend_boundary is False)
+check("an unverified frontend across a session boundary is rejected", frontend_boundary is False)
 
 missing_session = route_capture.has_terminal_ancestor(
     start_pid=30,

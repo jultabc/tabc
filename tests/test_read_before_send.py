@@ -39,37 +39,39 @@ con.commit()
 for n in ("erin", "alice", "frank"):
     tabus.bus_register(con, n, "generic")
 tabus.bus_tac_create(con, "sq")
+sq = [row["tac_id"] for row in tabus.bus_tac_list(con)
+      if row.get("name") == "sq"][0]
 for n in ("erin", "alice", "frank"):
-    tabus.bus_tac_add(con, "sq", n)
+    tabus.bus_tac_add(con, sq, n)
 
 # 1. erin has no unread messages in sq and can send; alice and frank receive it.
-m1, i1 = tabus.bus_send(con, "erin", [], "s1", "b1", tac_id="sq")
+m1, i1 = tabus.bus_send(con, "erin", [], "s1", "b1", tac_id=sq)
 check("erin sends successfully with no unread messages", m1 is not None)
 
 # 2. Reject alice's send because erin's s1 is unread.
-m2, i2 = tabus.bus_send(con, "alice", [], "s2", "b2", tac_id="sq")
+m2, i2 = tabus.bus_send(con, "alice", [], "s2", "b2", tac_id=sq)
 check(
     "alice cannot send while messages remain unread",
     m2 is None and "Read them first" in (i2 or "") and "unread" in (i2 or ""),
 )
 
 # 3. alice catches up with mark_read, releasing the guard and allowing sending.
-n = tabus.bus_tac_mark_read(con, "alice", "sq")
+n = tabus.bus_tac_mark_read(con, "alice", sq)
 check("alice marks one message (s1) read", n == 1)
-m3, i3 = tabus.bus_send(con, "alice", [], "s3", "b3", tac_id="sq")
+m3, i3 = tabus.bus_send(con, "alice", [], "s3", "b3", tac_id=sq)
 check("alice can send after reading", m3 is not None)
 
 # 4. Reciprocal guard: erin has not read alice's s3 and is now blocked too.
-m4, i4 = tabus.bus_send(con, "erin", [], "s4", "b4", tac_id="sq")
+m4, i4 = tabus.bus_send(con, "erin", [], "s4", "b4", tac_id=sq)
 check("reciprocal guard blocks erin until alice's s3 is read", m4 is None and "Read them first" in (i4 or ""))
-tabus.bus_tac_mark_read(con, "erin", "sq")
-m5, _ = tabus.bus_send(con, "erin", [], "s5", "b5", tac_id="sq")
+tabus.bus_tac_mark_read(con, "erin", sq)
+m5, _ = tabus.bus_send(con, "erin", [], "s5", "b5", tac_id=sq)
 check("erin can send after reading", m5 is not None)
 
 # 5. Non-member/unregistered observers mark zero messages read, without side effects.
 check(
     "non-member mark_read returns 0 without observer side effects",
-    tabus.bus_tac_mark_read(con, "ghost", "sq") == 0,
+    tabus.bus_tac_mark_read(con, "ghost", sq) == 0,
 )
 
 # DM extension: per-recipient guard.

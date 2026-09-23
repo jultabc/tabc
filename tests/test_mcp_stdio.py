@@ -17,6 +17,12 @@ from tabus import daemon, mcp_server as adapter, nodekey
 
 HAS_MCP = sys.version_info >= (3, 10) and importlib.util.find_spec("mcp") is not None
 
+# CI installs the MCP extra explicitly. A skipped stdio test there would make a
+# broken or missing adapter dependency look green, so fail before unittest can
+# turn the missing SDK into a skip. Local core-only installs may still skip it.
+if os.environ.get("CI") and not HAS_MCP:
+    raise RuntimeError("CI must install tabc with the mcp extra before stdio tests")
+
 
 @unittest.skipUnless(HAS_MCP, "Install .[mcp] on Python 3.10+ for stdio tests")
 class StdioTests(unittest.TestCase):

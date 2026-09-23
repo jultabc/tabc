@@ -33,11 +33,11 @@ venv/
 .idea/
 .vscode/
 
-# Editable install leaves this behind; `pip install -e .` is the documented
-# first step, so every contributor produces one.
+# Editable installs leave this behind. Contributors use the core install first,
+# then `pip install -e '.[mcp]'` for the optional adapter test.
 *.egg-info/
 
-# Build output. `python -m build` writes both, and a wheel committed once is a
-# stale copy of the source forever after.
+# Build output. `python -m build` writes both, and committing a wheel would leave
+# a stale copy of the source in the repository.
 build/
 dist/

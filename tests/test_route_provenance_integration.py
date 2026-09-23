@@ -65,6 +65,27 @@ class Integration(unittest.TestCase):
         finally:
             old.close()
 
+    def test_failed_capture_preserves_legacy_route_and_enter(self):
+        self.assertTrue(self.register(adapter="iterm2", target="old-pane",
+                                     host_id="host", auto_enter=True)[0])
+        before = self.route()
+        meta = {}
+        ok, message = self.register(revoke_route=True, revoke_adapter="iterm2",
+                                    revoke_target="old-pane", revoke_host_id="host",
+                                    result_meta=meta)
+        self.assertTrue(ok, message)
+        self.assertEqual(self.route(), before)
+        self.assertEqual(meta, {"route_active": True, "route_provenance_verified": False})
+
+    def test_failed_capture_does_not_restore_already_revoked_route(self):
+        self.register(adapter="iterm2", target="old-pane", host_id="host")
+        self.con.execute("UPDATE tab_routes SET revoked_at='previous-removal'")
+        self.con.commit()
+        before = self.route()
+        self.register(revoke_route=True, revoke_adapter="iterm2",
+                      revoke_target="old-pane", revoke_host_id="host")
+        self.assertEqual(self.route(), before)
+
     def test_agent_cannot_become_program_and_state_is_unchanged(self):
         for verified in (False, True):
             with self.subTest(verified=verified):

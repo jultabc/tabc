@@ -5,7 +5,9 @@ route, but they do not prove that the process registering it still belongs to
 that terminal.  A detached shared runner can therefore carry one tab's route,
 allocate a fresh PTY, and still register the stale tab.  Route capture accepts
 the inherited key only when its resolved TTY equals the controlling TTY of this
-process or a same-session ancestor.
+process or a same-session ancestor. A detached command may also use its immediate
+session-boundary parent when that parent is a recognized native interactive CLI
+and the foreground process-group leader of the target terminal.
 """
 
 import os
@@ -91,12 +93,13 @@ def terminal_tty(
     streams=None,
     session_id=None,
     process_session=None,
+    frontend_tty=None,
 ):
     """Return this process chain's controlling TTY, or None when unproved.
 
     ``ps`` is used instead of ``/proc`` so this works on both macOS and Linux.
-    Any lookup failure is a negative result: losing automatic notification is
-    safer than binding an agent to an unproved tab or pane.
+    Any lookup failure is a negative result. The cross-session fallback is
+    restricted to a checked native foreground CLI, not arbitrary ancestors.
     """
     inspect = process_row or _process_row
     inspect_session = process_session or _session_id
@@ -139,11 +142,14 @@ def terminal_tty(
         ancestor_session = inspect_session(pid)
         if ancestor_session is None:
             return None
-        # A session boundary is detachment evidence even when the process on the
-        # other side still owns a terminal.  setsid() deliberately leaves the
-        # terminal launcher in the ancestry graph, so crossing that boundary
-        # would let a detached worker borrow its launcher's route.
+        # Never cross arbitrary detached runners. Native interactive frontends
+        # deliberately create detached command sessions; only that immediate
+        # boundary parent may supply separately checked foreground CLI evidence.
         if ancestor_session != current_session:
+            if tty not in _NO_TTY:
+                from .terminal_frontend import foreground_frontend_tty
+                verify_frontend = frontend_tty or foreground_frontend_tty
+                return verify_frontend(pid, tty)
             return None
         if tty not in _NO_TTY:
             return tty
@@ -287,7 +293,11 @@ def inspect_route(environ=None, terminal_tty=None, route_tty=None):
         target_tty = _normalized_tty(resolve_target(candidate_adapter, candidate_target))
     except Exception:
         target_tty = None
-    if not target_tty or process_tty != target_tty:
+    try:
+        still_attached = _normalized_tty(inspect_terminal()) == process_tty
+    except Exception:
+        still_attached = False
+    if not target_tty or process_tty != target_tty or not still_attached:
         return RouteDecision(
             None,
             None,
