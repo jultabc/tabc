@@ -47,6 +47,18 @@ def _quoted(name):
     return '"' + name.replace('"', '""') + '"'
 
 
+def _source_uri(source):
+    """Open a stopped WAL ledger without creating sidecars in its directory.
+
+    immutable=1 must never be used while WAL state exists: SQLite would ignore rows
+    stored only in that WAL. The documented conversion procedure stops tabd and the
+    notifier first, so the no-sidecar case is a stable, closed ledger.
+    """
+    sidecars = (Path(f"{source}-wal"), Path(f"{source}-shm"))
+    immutable = "" if any(path.exists() for path in sidecars) else "&immutable=1"
+    return source.as_uri() + "?mode=ro" + immutable
+
+
 def reference_inventory(con):
     """Every column that looks like it holds a tac id, by name or by foreign key."""
     found = set()
@@ -202,7 +214,7 @@ def main(argv=None):
             parser.error(f"--rename takes OLD_ID=NAME, received {item!r}")
         renames[old_id] = name
     source = args.source.resolve(strict=True)
-    with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as original:
+    with closing(sqlite3.connect(_source_uri(source), uri=True)) as original:
         state = source_state(original)
         if args.output is None:
             print(json.dumps({"source": state, "would_convert": plan(original, renames)},
