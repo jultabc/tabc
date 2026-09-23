@@ -351,7 +351,8 @@ def deliver_doorbell(node_id, unread):
                 seen_scopes.add(scope)
                 key = "doorbell.ring_tac" if scope else "doorbell.ring"
                 parts.append(tabuslang.t(
-                    key, who=item["sender"], unread=item["count"], tac=scope,
+                    key, who=item["sender"], unread=item["count"],
+                    tac=item.get("tac_name") or scope,
                 ))
             msg = " / ".join(parts)
         else:

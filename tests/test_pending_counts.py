@@ -36,9 +36,11 @@ class PendingCountsTest(unittest.TestCase):
         self.send("carol", ["bob"])
         self.send("carol", ["dave"])
         bus.bus_tac_create(self.con, "plan", "Plan", by="alice")
+        plan = [row["tac_id"] for row in bus.bus_tac_list(self.con)
+                if row.get("name") == "plan"][0]
         for node in ("alice", "bob", "dave"):
-            bus.bus_tac_add(self.con, "plan", node, by="alice")
-        self.send("alice", [], tac_id="plan")
+            bus.bus_tac_add(self.con, plan, node, by="alice")
+        self.send("alice", [], tac_id=plan)
         before = list(map(tuple, self.con.execute("SELECT * FROM deliveries ORDER BY id")))
         self.assertEqual(self.counts("alice"), {"bob": 2, "dave": 1})
         self.assertEqual(self.counts("carol"), {"bob": 1, "dave": 1})
