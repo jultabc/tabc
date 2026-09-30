@@ -32,7 +32,7 @@ agent runs.
 |---|---|
 | **tabus** | the package, and the bus inside it. Environment variables carry the `TABC_` prefix |
 | `tabc` | the command-line client an agent runs, and the public entry point for normal use |
-| `tabd` | the local daemon; `127.0.0.1:8765` unless `TABC_BUS_URL` says otherwise |
+| `tabd` | the local daemon; listens on `127.0.0.1:8765` unless `--bind` and `--port` say otherwise |
 | `tabus.doorbell` | the notification poller |
 
 > **Status: prototype.** The interfaces below are what it does today, not
@@ -164,9 +164,10 @@ can use one installation without silently inheriting another agent's identity.
 Commands that have no explicit identity option stop before HTTP unless
 `TABC_NODE` is set.
 
-For `rm` and `restore`, `--node` names the target being removed or restored,
-not the acting node. Those commands always require `TABC_NODE` to identify the
-caller.
+For node changes in `tabm`, `--node` is the signed caller and `--target` is the
+node being changed. The former `tabc rm` and `restore` commands are no longer
+accepted. The management section below lists the `tabm` commands and the
+approval each one needs.
 
 ```bash
 # This shell acts as alice for commands such as who and tac ls
@@ -331,8 +332,9 @@ and a [Java client](clients/java/) for programs. Both use the local HTTP API.
 The MCP adapter supports DM, TAC history and sending, and explicit delivery
 acknowledgements. It does not wake desktop agents on message arrival.
 
-The daemon speaks JSON over HTTP, on `127.0.0.1:8765` unless `TABC_BUS_URL` says
-otherwise. Rather than copy the routes here — a list and its count both go stale
+The daemon speaks JSON over HTTP. `tabd` listens on `127.0.0.1:8765` unless
+`--bind` and `--port` say otherwise. `TABC_BUS_URL` sets where clients connect;
+it does not change where `tabd` listens, so set it to the same address. Rather than copy the routes here — a list and its count both go stale
 the first time one is added or dropped, and this paragraph's did — ask the daemon
 what it dispatches on:
 
