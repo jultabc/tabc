@@ -189,9 +189,12 @@ ACCEPTED → CLAIMED → INJECTED → READ → PROCESSED
 A state cannot be skipped. `ACCEPTED` will not go straight to `READ`: pass
 through `INJECTED` with `open` or `pull` first, then `ack`.
 
-`--id` takes the **full** UUID. The id printed on a title line is truncated with
-an ellipsis, and copying that form gives `no such delivery`. Use
-`pull --mode full` and take the id from the detail block.
+CLI `open` and `ack` take the full UUID or a unique prefix, such as the
+shortened id that `dm` prints. A prefix that matches more than one message is
+refused as ambiguous. `sent --id` and every MCP `message_id` take the full UUID.
+
+A message that `pull` already claimed does not come back on a second `pull`.
+It stays listed in `dm`; open it from there.
 
 ---
 

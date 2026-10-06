@@ -57,8 +57,8 @@ tabc sent --node alice
 ```
 
 The last line is what matters. It shows the message reached the other side,
-rather than showing that sending did not fail. `--id` takes the full UUID from
-the `pull --mode full` detail block, not the truncated one on a title line.
+rather than showing that sending did not fail. `ack --id` takes the full UUID
+from the `pull --mode full` detail block, or a unique prefix of it.
 
 Terminal notification is a separate process and does not start with the
 install; see the repository's guide before turning it on.
