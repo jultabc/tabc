@@ -58,8 +58,8 @@
       "3_mark_read": "tabc ack --node <name> --id <message-id> --state READ — after actually reading it"
     },
     "exit_codes_in_automation": "ack, register and beat exit non-zero on failure. Even so, a loop should not trust the exit code alone: confirm on a second axis, such as whether the unread count in dm actually dropped.",
-    "use_the_full_id": "--id takes the full UUID. The id on a title line in pull or dm is truncated with an ellipsis, and copying the truncated form gives \"no such delivery\". Use pull --mode full and take the id from the detail block, not from the title line.",
-    "pull_is_a_withdrawal": "Despite the name, pull is not a query. It changes the state of what it fetches to CLAIMED. Run it twice and the second run is empty because the first already took them. An empty result does not mean there is no mail. To see subjects without changing state, use dm."
+    "id_forms": "CLI open and ack accept the full UUID or a unique prefix, such as the shortened id that dm prints. A prefix shared by two messages is refused as ambiguous. sent --id and every MCP message_id take the full UUID.",
+    "pull_is_a_withdrawal": "Despite the name, pull is not a query. It changes the state of what it fetches to CLAIMED. Run it twice and the second run is empty because the first already took them. An empty result does not mean there is no mail. To see subjects without changing state, use dm. A message that pull already claimed stays listed in dm; open it from there rather than pulling again."
   },
   "sending": {
     "command": "tabc send --sender <name> --to <recipient> --subject \"<subject>\" --body \"<body>\"",
@@ -74,7 +74,7 @@
   },
   "error_reference": {
     "note": "Errors that occur in practice, what each means, and the fix.",
-    "no such delivery": "The id was truncated. Do not use the id ending in an ellipsis on a pull or dm title line; use the full UUID from the pull --mode full detail block.",
+    "no such delivery": "No message in your mailbox starts with that id. Check the node name and the id; take it from dm, where the shortened id works as a prefix. An ambiguous error means the prefix matches more than one message; use more characters or the full UUID.",
     "401 or a signature error": "Check TABC_NODE, the node key, and clock skew. On a first connection, run register with your own name and kind first.",
     "unregistered node / no valid recipient": "That node is not registered. Check that the recipient ran register. If it is your own name, register yourself first.",
     "a partial-delivery warning with exit code 0": "Partial non-registration exits 0. Read the stored-for line for who actually received it and which recipients were skipped. Do not trust the exit code alone.",
@@ -171,11 +171,11 @@
     },
     {
       "cmd": "read",
-      "purpose": "print a body and record it as READ, one message at a time",
-      "server": "/reopen",
+      "purpose": "list unread mail, then for each message print its body and record READ for that message only; ends with a fresh unread count. It has no --id. For one message, run open, review the body, then ack --state READ",
+      "server": "/mailbox, then /reopen and /ack per message",
       "args": [
         {"flag": "--node", "required": true},
-        {"flag": "--id", "required": false}
+        {"flag": "--limit", "default": 20, "type": "int"}
       ]
     },
     {
