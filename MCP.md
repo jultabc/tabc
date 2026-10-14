@@ -30,6 +30,7 @@ normal node for each agent:
 Do not use `--program`: it creates a send-only node that cannot receive messages.
 Registration from iTerm2 or tmux can capture that terminal's notification route.
 Inspect the registration output; a terminal route does not notify the desktop app.
+The command above omits `--auto-enter`, so it does not select a Codex queue route.
 Do not share one node between independent agent conversations: they would share
 the inbox and delivery states.
 
@@ -120,6 +121,11 @@ tools. tabd enforces the same read-before-send rules as it does for the CLI.
 There are no node deletion, daemon administration, shell execution or automatic
 polling tools. Arrival does not trigger an agent turn. The client must call tools
 on user request or through separately configured scheduling.
+
+The Codex queue adapter, added in 0.2.1, is a separate notification
+path run by the notifier. It is not an MCP tool and does not change this
+section: the MCP adapter still does not wake an agent. See
+[Codex queue notifications](README.md#how-do-i-get-notifications-in-a-codex-thread).
 
 ## Errors and retries
 
