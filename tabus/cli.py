@@ -255,6 +255,12 @@ def fn_register(a):
     take_route = bool(getattr(a, "take_route", False))
     setting = getattr(a, "auto_enter", None)
     auto_enter = setting == "on"
+    if getattr(a, "codex_queue", False) and take_route:
+        print("--codex-queue does not support --take-route")
+        sys.exit(2)
+    if getattr(a, "codex_queue", False) and getattr(a, "program", None) is not None:
+        print("--codex-queue and --program cannot be used together")
+        sys.exit(2)
     if setting is not None:
         payload["auto_enter"] = auto_enter
     if getattr(a, "program", None) is not None and take_route:
@@ -290,6 +296,19 @@ def fn_register(a):
     else:
         captured = _capture_route()
         adapter, target = captured
+        # Codex shared-daemon commands have a thread identity, not a TTY owner.
+        # Keep this explicit: opting into queue delivery changes submission
+        # semantics and must not silently replace an existing terminal route.
+        if getattr(a, "codex_queue", False):
+            if a.kind != "codex" or setting != "on":
+                print("--codex-queue requires --kind codex --auto-enter on")
+                sys.exit(2)
+            from .codex_queue import capture_current_thread
+            target = capture_current_thread()
+            if target is None:
+                print("cannot verify the current Codex managed-daemon thread; registration not sent")
+                sys.exit(2)
+            adapter = "codex-queue"
         # A failed local capture cannot invalidate a previously stored route.
         # Do not send legacy auto-revocation fields, even to an older daemon.
         if not getattr(captured, "rejected", False) and take_route:
@@ -1062,6 +1081,8 @@ COMMANDS = {
         [
             (("--node",), dict(required=True)),
             (("--kind",), dict(default="generic")),
+            (("--codex-queue",), dict(action="store_true",
+                help="deliver to this Codex thread instead of typing into a terminal; requires auto-enter on")),
             (
                 ("--take-route",),
                 dict(

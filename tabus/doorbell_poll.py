@@ -61,7 +61,7 @@ LEDGER_DB = os.environ.get(
 #   The legacy entry covers rings that went out through the old path. Those did
 #   ring, so they suppress. It has its own name so it can be counted; when it
 #   reaches zero, that path can be deleted.
-SUPPRESSING = ("SUCCESS", "SUCCESS_LEGACY", "SHADOW_ONLY", "TEXT_ONLY")
+SUPPRESSING = ("SUCCESS", "SUCCESS_LEGACY", "SHADOW_ONLY", "TEXT_ONLY", "QUEUED")
 UNKNOWN_RETRY_SECONDS = 30
 _unknown_attempts = {}
 
