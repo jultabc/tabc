@@ -178,7 +178,7 @@ class DoorbellTests(unittest.TestCase):
 
 
 class RegistrationTests(unittest.TestCase):
-    def invoke(self, **overrides):
+    def invoke(self, capture=THREAD, terminal=(None, None), **overrides):
         from tabus import cli
         args = dict(node="hu", kind="codex", codex_queue=True, auto_enter="on",
                     program=None, take_route=False)
@@ -186,10 +186,10 @@ class RegistrationTests(unittest.TestCase):
         with patch.object(cli, "_user_email", return_value=None), \
              patch.object(cli, "_nodekey", return_value=SimpleNamespace(public_key_b58=lambda _: "public")), \
              patch.object(cli, "_node_key_path", return_value="unused"), \
-             patch.object(cli, "_capture_route", return_value=(None, None)), \
+             patch.object(cli, "_capture_route", return_value=terminal), \
              patch.object(cli, "_host_id", return_value="host-a"), \
-             patch("tabus.codex_queue.capture_current_thread", return_value=THREAD), \
-             patch.object(cli, "call", return_value=(200, {"ok":True, "auto_enter":True,
+             patch("tabus.codex_queue.capture_current_thread", return_value=capture), \
+             patch.object(cli, "call", return_value=(200, {"ok":True, "auto_enter":args["auto_enter"] == "on",
                   "msg":"registered hu route=codex-queue"})) as call, \
              contextlib.redirect_stdout(io.StringIO()):
             try:
@@ -213,6 +213,43 @@ class RegistrationTests(unittest.TestCase):
             code, call = self.invoke(**overrides)
             self.assertEqual(code, 2)
             call.assert_not_called()
+
+    def test_kind_is_required_by_parser(self):
+        from tabus.cli import build_parser
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as exc:
+            build_parser().parse_args(["register", "--node", "hu"])
+        self.assertEqual(exc.exception.code, 2)
+        self.assertEqual(build_parser().parse_args(
+            ["register", "--node", "hu", "--kind", "generic"]).kind, "generic")
+
+    def test_codex_selects_queue_automatically(self):
+        code, call = self.invoke(codex_queue=False)
+        self.assertEqual(code, 0)
+        self.assertEqual(call.call_args.args[2]["adapter"], "codex-queue")
+
+    def test_automatic_fallback_preserves_terminal_target(self):
+        code, call = self.invoke(codex_queue=False, capture=None, terminal=("tmux", "%42"))
+        self.assertEqual(code, 0)
+        self.assertEqual(call.call_args.args[2]["adapter"], "tmux")
+        self.assertEqual(call.call_args.args[2]["target"], "%42")
+
+    def test_missing_routes_or_forced_queue_failure_send_nothing(self):
+        for force in (False, True):
+            code, call = self.invoke(codex_queue=force, capture=None,
+                                     terminal=("tmux", "%42") if force else (None, None))
+            self.assertEqual(code, 2)
+            call.assert_not_called()
+
+    def test_other_kind_and_off_do_not_select_queue(self):
+        for overrides in ({"kind": "claude"}, {"auto_enter": "off"}):
+            code, call = self.invoke(codex_queue=False, terminal=("tmux", "%42"), **overrides)
+            self.assertEqual(code, 0)
+            self.assertEqual(call.call_args.args[2]["adapter"], "tmux")
+
+    def test_automatic_queue_refuses_terminal_takeover(self):
+        code, call = self.invoke(codex_queue=False, take_route=True)
+        self.assertEqual(code, 2)
+        call.assert_not_called()
 
 
 if __name__ == "__main__":

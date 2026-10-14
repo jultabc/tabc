@@ -297,18 +297,22 @@ def fn_register(a):
         captured = _capture_route()
         adapter, target = captured
         # Codex shared-daemon commands have a thread identity, not a TTY owner.
-        # Keep this explicit: opting into queue delivery changes submission
-        # semantics and must not silently replace an existing terminal route.
-        if getattr(a, "codex_queue", False):
+        # Automatic queue selection still requires explicit submission consent.
+        force_queue = getattr(a, "codex_queue", False)
+        if force_queue or (a.kind == "codex" and auto_enter):
             if a.kind != "codex" or setting != "on":
                 print("--codex-queue requires --kind codex --auto-enter on")
                 sys.exit(2)
             from .codex_queue import capture_current_thread
-            target = capture_current_thread()
-            if target is None:
+            queue_target = capture_current_thread()
+            if queue_target is None and force_queue:
                 print("cannot verify the current Codex managed-daemon thread; registration not sent")
                 sys.exit(2)
-            adapter = "codex-queue"
+            if queue_target is not None:
+                if take_route:
+                    print("Codex queue delivery does not support --take-route; registration not sent")
+                    sys.exit(2)
+                adapter, target = "codex-queue", queue_target
         # A failed local capture cannot invalidate a previously stored route.
         # Do not send legacy auto-revocation fields, even to an older daemon.
         if not getattr(captured, "rejected", False) and take_route:
@@ -1080,9 +1084,9 @@ COMMANDS = {
         "register a node",
         [
             (("--node",), dict(required=True)),
-            (("--kind",), dict(default="generic")),
+            (("--kind",), dict(required=True)),
             (("--codex-queue",), dict(action="store_true",
-                help="deliver to this Codex thread instead of typing into a terminal; requires auto-enter on")),
+                help="require Codex queue delivery without terminal fallback; requires kind codex and auto-enter on")),
             (
                 ("--take-route",),
                 dict(
