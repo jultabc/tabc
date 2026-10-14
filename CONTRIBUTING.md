@@ -116,7 +116,8 @@ The package is deliberately split by responsibility:
 | `tabus/bus.py` | schema, migrations, and message or delivery operations |
 | `tabus/daemon.py` | HTTP authentication, authorization, and route dispatch |
 | `tabus/cli.py` | argument parsing, request signing, and CLI output |
-| `tabus/doorbell.py` | terminal notification; it reads the message store but does not write it |
+| `tabus/doorbell.py` | terminal and Codex queue notification; it reads the message store but does not write it |
+| `tabus/codex_queue.py` | Codex thread capture at registration and queue submission with its local receipt database |
 
 A normal CLI request starts in `COMMANDS` in `tabus/cli.py`, calls its handler,
 maps to an HTTP path through `MAPPING`, passes authentication and any self-scope
@@ -221,7 +222,9 @@ test needs to replace the function used by that module.
 ### Should a headless client use `--program`?
 
 Only when it is a send-only event source. A normal node can send and pull without
-a terminal; it simply has no doorbell route. `register` accepts a tmux or iTerm
+a terminal; it simply has no terminal doorbell route. A Codex agent under the
+native managed-daemon app-server can use the Codex queue route instead
+(0.2.1 and later; see README). `register` accepts a tmux or iTerm
 route only when it matches the process terminal or a same-session ancestor.
 Inherited environment variables alone are not proof. `--program` registers a
 send-only identity: incoming envelopes are refused. Use a separate name; an
