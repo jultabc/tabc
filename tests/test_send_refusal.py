@@ -34,6 +34,7 @@ import threading
 import time
 import unicodedata
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.request
 
@@ -600,8 +601,20 @@ class SlowPeers(unittest.TestCase):
         tabd.BODY_READ_SEC = cls.BODY_SEC
         tabd.DRAIN_SEC, tabd.DRAIN_MAX_BYTES, tabd.HOLD_SEC = cls.DRAIN_SEC, cls.DRAIN_MAX, cls.HOLD
         tabd.init_extras()
-        handler = type("QuickIdleHandler", (tabd.BusHandler,), {"timeout": cls.IDLE})
+        class QuickIdleHandler(tabd.BusHandler):
+            timeout = cls.IDLE
+
+            def _read_declared_body(self):
+                started = time.monotonic()
+                result = super()._read_declared_body()
+                elapsed = time.monotonic() - started
+                # Record the actual body-read interval, not signing or response time.
+                self.server.body_reads[result[0]] = (elapsed, result[2])
+                return result
+
+        handler = QuickIdleHandler
         cls.server = QuietServer(("127.0.0.1", 0), handler)
+        cls.server.body_reads = {}
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.port = cls.server.server_port
         for n in ("mina", "yuna", "sora"):
@@ -663,8 +676,22 @@ class SlowPeers(unittest.TestCase):
         self.assertLess(seconds, self.IDLE + 1)
 
     def test_slow_send_inside_both_limits_is_stored(self):
+        self.assert_slow_send_is_stored("slow")
+
+    def test_slow_send_with_delayed_response_is_stored(self):
+        original = tabd.BusHandler._json
+
+        def delayed(handler, code, obj):
+            if handler.path == "/send" and code == 200:
+                time.sleep(self.BODY_SEC)
+            return original(handler, code, obj)
+
+        with patch.object(tabd.BusHandler, "_json", delayed):
+            self.assert_slow_send_is_stored("slow-response")
+
+    def assert_slow_send_is_stored(self, subject):
         # Pauses shorter than the idle limit, and the whole body inside the body limit.
-        body = json.dumps({"from": "mina", "to": ["yuna"], "subject": "slow", "body": "x" * 20000}).encode()
+        body = json.dumps({"from": "mina", "to": ["yuna"], "subject": subject, "body": "x" * 20000}).encode()
         s = self.connect()
         started = time.monotonic()
         s.sendall(signed_head("mina", "POST", "/send", body.decode()))
@@ -674,9 +701,11 @@ class SlowPeers(unittest.TestCase):
             s.sendall(body[i:i + step])
         data, seconds, how, first = until_end(s, started, limit=10)
         self.assertTrue(data.startswith(b"HTTP/1.0 200"), data[:80])
-        self.assertGreater(seconds, self.IDLE)
-        self.assertLess(seconds, self.BODY_SEC)
-        self.assertEqual(self.stored("slow"), 1)
+        body_seconds, outcome = self.server.body_reads[body]
+        self.assertEqual(outcome, "whole")
+        self.assertGreater(body_seconds, self.IDLE)
+        self.assertLess(body_seconds, self.BODY_SEC)
+        self.assertEqual(self.stored(subject), 1)
 
     def test_body_that_takes_longer_than_the_body_limit_is_refused(self):
         # 🔴 Pieces arrive inside the idle limit, so only the whole-body limit ends this.

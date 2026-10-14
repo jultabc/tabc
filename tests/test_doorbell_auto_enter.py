@@ -18,6 +18,10 @@ sys.path.insert(0, ROOT)
 
 import tabus  # noqa: E402
 from tabus import cli, doorbell  # noqa: E402
+from tabus import codex_queue  # noqa: E402
+
+# These standalone tests exercise terminal routes, not the runner's Codex context.
+codex_queue.capture_current_thread = lambda: None
 
 
 fails = []
@@ -149,15 +153,17 @@ check(
 
 # The command accepts only on/off and keeps omission off.
 parser = cli.build_parser()
-missing_args = parser.parse_args(["register", "--node", "alice"])
-on_args = parser.parse_args(["register", "--node", "alice", "--auto-enter", "on"])
-off_args = parser.parse_args(["register", "--node", "alice", "--auto-enter", "off"])
-name_on_args = parser.parse_args(["register", "--node", "alice", "--auto-enter", "on"])
+missing_args = parser.parse_args(["register", "--node", "alice", "--kind", "claude"])
+on_args = parser.parse_args(["register", "--node", "alice", "--kind", "claude", "--auto-enter", "on"])
+off_args = parser.parse_args(["register", "--node", "alice", "--kind", "claude", "--auto-enter", "off"])
+name_on_args = parser.parse_args(["register", "--node", "alice", "--kind", "claude", "--auto-enter", "on"])
 take_on_args = parser.parse_args(
     [
         "register",
         "--node",
         "alice",
+        "--kind",
+        "claude",
         "--take-route",
         "--auto-enter",
         "on",
@@ -172,7 +178,7 @@ check(
     take_on_args.take_route is True and take_on_args.auto_enter == "on",
 )
 try:
-    parser.parse_args(["register", "--node", "alice", "--auto-enter", "yes"])
+    parser.parse_args(["register", "--node", "alice", "--kind", "claude", "--auto-enter", "yes"])
 except SystemExit as exc:
     invalid_rejected = exc.code != 0
 else:
