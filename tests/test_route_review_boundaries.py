@@ -28,6 +28,10 @@ import tabus  # noqa: E402
 from tabus import cli as tabc  # noqa: E402
 from tabus import daemon as tabd  # noqa: E402
 from tabus import nodekey  # noqa: E402
+from tabus import codex_queue  # noqa: E402
+
+# Keep terminal-proof failure cases independent of the runner's Codex context.
+codex_queue.capture_current_thread = lambda: None
 
 fails = []
 

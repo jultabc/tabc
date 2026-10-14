@@ -156,13 +156,13 @@ def parses(argv):
         return None
 
 
-ns_reg = parses(["register", "--node", "bob", "--take-route"])
+ns_reg = parses(["register", "--node", "bob", "--kind", "claude", "--take-route"])
 check("f register parses --take-route", ns_reg is not None and getattr(ns_reg, "take_route", None) is True)
 
-ns_name = parses(["register", "--node", "bob", "--take-route"])
+ns_name = parses(["register", "--node", "bob", "--kind", "claude", "--take-route"])
 check("f register parses --take-route", ns_name is not None and getattr(ns_name, "take_route", None) is True)
 
-ns_plain = parses(["register", "--node", "bob"])
+ns_plain = parses(["register", "--node", "bob", "--kind", "claude"])
 check(
     "f without the flag the parsed value is false or absent",
     ns_plain is not None and getattr(ns_plain, "take_route", False) in (None, False),
