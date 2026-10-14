@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.2.1 — 2026-10-15
+
+### Added
+
+- A Codex queue notification route. Under the native Codex managed-daemon
+  app-server, the notifier submits notification metadata to the registered
+  Codex thread with `codex queue` instead of typing into a terminal.
+- `register --codex-queue` requires that route with no terminal fallback. It
+  needs `--kind codex` and `--auto-enter on`.
+- A local receipt database, `codex_queue_receipts.db`, that limits submission
+  to one attempt per thread UUID and notification ID. An uncertain result is
+  recorded as `UNKNOWN` and is not submitted again automatically.
+
+### Changed
+
+- `register` requires `--kind`. The previous default, `generic`, is removed.
+- `register --kind codex --auto-enter on` selects the Codex queue route when
+  the current Codex thread verifies, then a terminal route verified by the same
+  command. With neither, registration is refused and existing routes are kept.
+- When registration selects the Codex queue route, `--take-route` is refused.
+
+### Upgrade notes
+
+- The ledger schema is unchanged. Nodes, signing keys, messages, delivery
+  states, TACs, and routes are kept. No conversion is needed.
+- Stop `tabus.doorbell`, install 0.2.1, restart `tabd`, then start one
+  `tabus.doorbell` from the same installation:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.1"
+# Or, for desktop MCP support:
+python -m pip install --upgrade "tabc[mcp]==0.2.1"
+```
+
+- Confirm the running notifier is 0.2.1 before registering Codex queue routes.
+  Run one notifier. An older notifier records `UNSUPPORTED` for these routes.
+- Scripts that call `register` without `--kind` must add it.
+- To use the Codex queue route, register again from each intended Codex
+  conversation after the notifier is replaced.
+- The notifier creates `codex_queue_receipts.db` in the tabc home directory on
+  its first Codex queue submission. It is separate from message read state.
+- The Codex queue route is a notifier path. It is not part of the MCP adapter,
+  which still does not wake an agent.
+- If a desktop client runs `tabc-mcp`, restart that MCP process from the client
+  after the upgrade so it loads the new installation.
+- Checked with codex-cli 0.162.1 on macOS only.
+- After restart, `tabc --version` and `tabd --version` report 0.2.1.
+
 ## 0.2.0 — 2026-09-23
 
 ### Added

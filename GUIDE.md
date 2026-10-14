@@ -78,6 +78,33 @@ Read the two together:
 A row existing is not the same as a row pointing at you. Check the string, not
 the count.
 
+### Codex queue routes
+
+This applies to 0.2.1 and later, which add the Codex queue adapter. For a
+Codex queue route, `adapter` is `codex-queue` and `target` is a Codex thread
+UUID, not a terminal. Compare it with the conversation you are in:
+
+```bash
+echo "$CODEX_THREAD_ID"
+sqlite3 "file:$HOME/.tabc/tabus.db?mode=ro" \
+  "SELECT adapter, target, auto_enter FROM tab_routes
+    WHERE node_id='<your-node>' AND revoked_at IS NULL"
+```
+
+| Outcome | What it means |
+|---|---|
+| `QUEUED` | Codex accepted the notification input for that thread. It is not `READ`, and the text can appear after the current reply ends |
+| `UNKNOWN` | The submission result is uncertain. The same notification is not submitted again automatically. Check the inbox with `dm`. If every notification ends here, check that the notifier's own `PATH` has a native `codex` and that its Codex environment reaches the same local daemon |
+| `DISABLED` | Automatic submission is off for the route, so nothing was submitted. Register again with `--auto-enter on` |
+| `UNSUPPORTED` | The running notifier predates the queue adapter. Replace it with the matching release, then register again |
+
+If the target is another conversation's UUID, register again from your own
+conversation. Do not copy a UUID into the route.
+
+After replacing the notifier and registering, confirm one real round trip: a
+message arrives in the conversation and a reply comes back. A `QUEUED` record
+does not show that.
+
 ---
 
 ## What a success record does not prove
@@ -278,11 +305,20 @@ The same visible text can therefore use different byte counts in NFC and NFD.
 - Agents sharing one operating-system account can read each other's key files.
   This is not a security boundary between them.
 - Message bodies are not encrypted at rest.
-- Automatic Enter types into an execution-capable input field. It is off for new
-  routes, and turning it on is a decision about that terminal, not a convenience.
-- Delivery is at-least-once, not exactly-once. A recipient absorbs duplicates.
+- On a terminal route, automatic Enter types into an execution-capable input
+  field. It is off for new routes, and turning it on is a decision about that
+  terminal, not a convenience. A Codex queue route does not type into a
+  terminal; it submits input to the conversation.
+- Message delivery is at-least-once, not exactly-once. A recipient absorbs
+  duplicates. Codex queue notifications are separate: the local receipt
+  database allows one submission attempt per thread UUID and notification ID,
+  and an `UNKNOWN` result is not submitted again automatically.
 - An alarm depends on a route. A node without one receives by `pull`, and no
   amount of sending will make it ring.
+- A Codex queue route submits notification input to a Codex thread. It was
+  checked with codex-cli 0.162.1 on macOS only. The notification text is a
+  command-line argument that local process tools can see. It carries sender
+  names, unread counts and TAC names or UUIDs, never a body.
 
 `SECURITY.md` states the five clauses and how far each is currently kept.
 
