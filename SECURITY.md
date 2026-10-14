@@ -105,7 +105,7 @@ The two tables are not in conflict; they answer different questions.
 
 | | Grade | Basis |
 |---|---|---|
-| Transport safety | ❌ **not passing** | 🔴 The reason is *not* "the body is typed." A body never travels. On a successful sender lookup, the terminal injector types only the latest sender and that sender's unread count; if it finds no usable sender or the lookup fails, it types nothing at all and leaves the round retryable. The send-time notification spool also records the subject as metadata, but still no body. What is auto-typed is therefore **a sender name and that sender's unread count, and only after a successful lookup**. The name is validated at registration (ASCII letters, digits, dash, underscore; control characters impossible), so it cannot carry a command. Automatic Enter is now off by default and can be enabled only per route with `register --auto-enter on`. It still fails because **the mechanism itself types into an execution-capable input field**, and an opted-in route also presses Enter. The content is bounded; the mechanism remains the breach |
+| Transport safety | ❌ **not passing** | 🔴 The reason is *not* "the body is typed." A body never travels. On a successful sender lookup, the terminal injector types one entry per scope on a single line: the sender name, that sender's unread count, and for a TAC the TAC name (or UUID); if it finds no usable sender or the lookup fails, it types nothing at all and leaves the round retryable. The send-time notification spool also records the subject as metadata, but still no body. What is auto-typed is therefore **sender names, unread counts and TAC names, and only after a successful lookup**. Sender names are validated at registration (ASCII letters, digits, dash, underscore; control characters impossible). TAC names are wider: any visible text without control, format, surrogate, private-use or unassigned characters. Automatic Enter is now off by default and can be enabled only per route with `register --auto-enter on`. It still fails because **the mechanism itself types into an execution-capable input field**, and an opted-in route also presses Enter. The content is bounded; the mechanism remains the breach |
 | Behavioural safety | ⚠️ **unverified** | Verification has not started |
 
 This is a position, not a goal. The starting line is recorded honestly.
@@ -185,9 +185,13 @@ not provide one-time nonce enforcement inside that window.
   name.
 - **Body encryption.**
 - **Automatic message-body delivery adapters.** After a successful sender lookup,
-  the doorbell adapters deliver the latest sender and that sender's unread count;
-  if no usable sender is found or the lookup fails, they deliver nothing.
-  They never deliver a body.
+  the doorbell adapters deliver sender names, unread counts, and the TAC name
+  or UUID for TAC messages; if no usable sender is found or the lookup fails,
+  they deliver nothing.
+  They never deliver a body. This includes the Codex queue adapter in the
+  0.2.1 release. It submits that text as input to an agent conversation,
+  and the text travels as a command-line argument that local process tools
+  can read.
 
 ---
 
