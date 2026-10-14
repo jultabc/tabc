@@ -19,8 +19,9 @@ Two kinds of node, and the difference is about communication capability, not
 whether a terminal is attached:
 
 - **Normal.** A Claude or Codex agent using the CLI or an MCP client. It can send
-  and pull messages. A terminal route may ring the doorbell; an MCP-only client
-  has no terminal doorbell and receives by pulling.
+  and pull messages. The notifier can use a verified terminal route or the
+  [Codex-specific queue adapter](#how-do-i-get-notifications-in-a-codex-thread).
+  MCP alone does not provide arrival notifications; MCP-only clients pull.
 - **Program** (`register --program`). A hook, a daemon, a scheduled job. It is a
   send-only event source: it claims no terminal, can send as its signed node, and
   is rejected if an envelope names it as a recipient.
@@ -41,6 +42,11 @@ agent runs.
 > request. SQLite for storage; standard library for the rest.
 
 See the [changelog](CHANGELOG.md) for release-specific changes and upgrade notes.
+
+> **0.2.1:** `register` requires `--kind`. A Codex agent can receive
+> notifications through the Codex queue adapter. Scripts that call `register`
+> without `--kind` must add it. See
+> [Upgrading from 0.2.0 to 0.2.1](#upgrading-from-020-to-021).
 
 It is meant to stay small enough to read. Count it rather than trust a number
 printed here — a baked total is stale by the next commit, which is why this
@@ -146,6 +152,7 @@ use this to stay away from the real inbox.
 | `~/.tabc/host_id` | stable id used to decide which installation owns a terminal route |
 | `~/.tabc/user_email` | optional owner label written by `tabm config` |
 | `~/.tabc/data/doorbell_ring.db` | the doorbell's separate observation and ring ledger |
+| `~/.tabc/codex_queue_receipts.db` | local Codex queue submission receipts, separate from message read state |
 
 `TABC_DB` may point the message database somewhere else. It does not move keys,
 `host_id`, or the doorbell ledger; use `TABC_HOME` when you want a fully isolated
@@ -176,19 +183,25 @@ export TABC_NODE=alice
 # Register or re-register the node and capture a route when one is available
 tabc register --node alice --kind codex
 
-# Opt in only when this exact route should press Enter after the doorbell text
+# Opt in to automatic submission: Enter on a terminal route, or queue input on
+# a Codex queue route
 tabc register --node alice --kind codex --auto-enter on
 
 ```
 
-`register` alone bootstraps the node's key and registers a normal node.
-It inspects `TMUX`/`TMUX_PANE` and `ITERM_SESSION_ID` and accepts a route only when
+`register` requires `--node` and `--kind`. With `--kind codex --auto-enter on`,
+it first checks whether it can select the current Codex queue route. See the
+[Codex adapter](#how-do-i-get-notifications-in-a-codex-thread) for requirements.
+Without a queue route, terminal capture inspects `TMUX`/`TMUX_PANE` and
+`ITERM_SESSION_ID` and accepts a route only when
 the target terminal matches this process's controlling terminal or a same-session
 ancestor's terminal. Piped output alone does not prevent registration; inherited
-variables alone do not prove attachment. A rejected inherited route can retire
-only the same node's exact matching unverified legacy route, never a verified
-route or a different target. With no route variables, registration preserves any
-existing route; use `read` when this process has no verified route. The former `name` command
+variables alone do not prove attachment. A rejected inherited route is not sent
+and does not revoke or replace an existing route. Without `--auto-enter on`,
+registration with no verified route preserves existing routes; use `read` when
+this process has no verified route. With `--auto-enter on` and no verified route,
+registration is refused before anything is sent, and existing routes are
+unchanged. The former `name` command
 and automatic terminal title changes have been removed.
 
 Automatic Enter is **off for new routes**. Omitting `--auto-enter` preserves
@@ -331,6 +344,8 @@ This repository includes an optional [MCP server](MCP.md) for desktop agents
 and a [Java client](clients/java/) for programs. Both use the local HTTP API.
 The MCP adapter supports DM, TAC history and sending, and explicit delivery
 acknowledgements. It does not wake desktop agents on message arrival.
+The Codex queue adapter is a separate notification path, not an MCP capability
+or general desktop-app notification support.
 
 The daemon speaks JSON over HTTP. `tabd` listens on `127.0.0.1:8765` unless
 `--bind` and `--port` say otherwise. `TABC_BUS_URL` sets where clients connect;
@@ -430,10 +445,11 @@ terminal the ring would reach without touching anyone's keyboard, and a
 mis-registered route is much easier to see there than after it has typed into
 the wrong window.
 
-`LIVE` types into a terminal's input field. That is the mechanism, not a side
-effect — see [SECURITY.md](SECURITY.md), where transport safety is marked as
-not passing for exactly this reason. Automatic Enter is a separate decision
-again, off by default, and enabled per route with `register --auto-enter on`.
+For terminal routes, `LIVE` types into the terminal's input field. See
+[SECURITY.md](SECURITY.md) for the risks of terminal injection. For a Codex queue
+route, `LIVE` submits notification input to the selected conversation instead.
+Automatic submission is off for new routes and requires an explicit
+`register --auto-enter on`; the Codex queue route cannot submit text without it.
 
 ### Why did registration succeed but no doorbell route appear?
 
@@ -446,6 +462,69 @@ the verification flag is a client claim, not a security boundary against signed 
 creates a send-only node.
 Use a separate name: an existing agent cannot be converted into a program.
 New program registration and re-registration of an existing program are allowed.
+
+### How do I get notifications in a Codex thread?
+
+The Codex-specific adapter submits notification input with `codex queue`,
+without typing into a terminal. It is separate from the MCP adapter. Validation
+was performed with codex-cli 0.162.1 on macOS; other versions and desktop hosts
+are not covered by that result.
+
+1. Replace and verify the running notifier with 0.2.1 or later
+   before registering queue routes. Run one notifier, not two. An older
+   notifier records `UNSUPPORTED` for this route.
+2. Run registration from each intended Codex conversation, using the matching
+   CLI:
+
+```bash
+tabc register --node <your-node> --kind codex --auto-enter on
+```
+
+The CLI checks the format of the current `CODEX_THREAD_ID`, that the command
+runs below a native Codex managed-daemon app-server, and that the `codex`
+executable is a native Codex release. It does not ask any server who owns the
+thread, so these checks are not proof of thread or terminal ownership. Do not
+copy another conversation's UUID or the shared daemon's terminal ID.
+
+With `--kind codex --auto-enter on`, registration selects a route in this order:
+
+1. If the checks pass, the Codex queue route, including when it replaces this
+   node's existing terminal route.
+2. Otherwise, a terminal route verified by this command.
+3. If neither is available, registration is refused before anything is sent,
+   and existing routes stay unchanged.
+
+With `--auto-enter off` or omitted, registration does not select a queue route.
+
+To require queue delivery without terminal fallback, add `--codex-queue`:
+
+```bash
+tabc register --node <your-node> --kind codex --codex-queue --auto-enter on
+```
+
+If the checks fail, it prints `cannot verify the current Codex managed-daemon
+thread; registration not sent` and exits 2. When registration refuses, read the
+error and do not work around it with a copied identity or another route. Queue
+selection cannot be combined with `--take-route`; `--codex-queue` cannot be
+combined with `--program`.
+
+- `QUEUED` means Codex accepted notification input, not `READ` or work
+  completion. Display may follow the current reply; immediate interruption or
+  delivery within a fixed time is not guaranteed. Pull the stored message and
+  record its read state separately.
+- Notifications contain metadata only: sender names, unread counts, and the TAC
+  name or UUID for TAC messages. They never contain message bodies. The text is
+  a command-line argument that local process tools can see.
+- The notifier, not the registering conversation, runs `codex queue`. It needs a
+  native `codex` on its own `PATH` and a Codex environment that reaches the same
+  local daemon. Without that, each notification can end as `UNKNOWN`.
+- After replacing the notifier and registering, confirm one real round trip: a
+  message arrives in the conversation, and a reply comes back. `QUEUED` alone
+  does not show that.
+- The local receipt database permits one submission attempt per thread UUID
+  and notification ID. An uncertain result is `UNKNOWN` and is not retried
+  automatically under that ID. Losing the database or moving to another thread
+  is outside this duplicate-prevention boundary.
 
 ### Can an adapter write `tabus.db` directly?
 
@@ -519,6 +598,39 @@ acting node (from `--node`, or `TABC_NODE`) in the audit. `ls`, `check`, and
 the returned deliveries advance to `INJECTED`, not `READ`. Use `ack` after
 reviewing each message. `search --query <text>` searches names, descriptions,
 subjects, and bodies without changing delivery state.
+
+### Upgrading from 0.2.0 to 0.2.1
+
+0.2.1 does not change the ledger schema. Nodes, signing keys, messages, delivery
+states, TACs, and routes are kept. No conversion is needed.
+
+Use this order:
+
+```bash
+# First stop tabus.doorbell.
+
+# Install one of these packages.
+python -m pip install --upgrade "tabc==0.2.1"
+# Or, include the optional MCP adapter:
+python -m pip install --upgrade "tabc[mcp]==0.2.1"
+
+# Restart tabd, then start one tabus.doorbell from the same installation.
+tabc --version
+tabd --version
+```
+
+- Run the CLI and the notifier from the same installation. Run one notifier,
+  not two.
+- Every `register` call requires `--kind`. Update scripts that omit it.
+- To use the Codex queue route, register again from each intended Codex
+  conversation after the notifier runs 0.2.1. See
+  [How do I get notifications in a Codex thread?](#how-do-i-get-notifications-in-a-codex-thread)
+- The notifier creates `codex_queue_receipts.db` in the tabc home directory on
+  its first Codex queue submission. It is separate from message read state.
+- The Codex queue route is a notifier path. It is not part of the MCP adapter.
+- If a desktop client runs `tabc-mcp`, restart that MCP process from the client
+  after the upgrade so it loads the new installation.
+- An upgrade from 0.1.6 follows the 0.2.0 procedure below first.
 
 ### Upgrading an existing TAC ledger to 0.2.0
 
@@ -650,8 +762,8 @@ choice rather than an oversight.
 
 ## Invariants
 
-- **Store first, notify second.** The notification carries the sender and an
-  unread count — never a body.
+- **Store first, notify second.** The notification carries sender names, unread
+  counts, and the TAC name or UUID for TAC messages — never a body.
   Receiving-then-storing cannot structurally prevent loss while a node is down.
 - **One row per recipient.** Delivery is at-least-once, not exactly-once.
   Duplicates are absorbed on the receiving side.

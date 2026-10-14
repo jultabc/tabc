@@ -63,6 +63,24 @@ from the `pull --mode full` detail block, or a unique prefix of it.
 Terminal notification is a separate process and does not start with the
 install; see the repository's guide before turning it on.
 
+## Updating from 0.2.0
+
+The ledger schema is unchanged. Nodes, signing keys, messages, delivery states,
+TACs, and routes are kept. Stop `tabus.doorbell`, install, restart `tabd`, then
+start one `tabus.doorbell` from the same installation:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.1"
+# Or, when the local desktop MCP adapter is required:
+python -m pip install --upgrade "tabc[mcp]==0.2.1"
+```
+
+`register` now requires `--kind`. Update scripts that omit it. Codex agents
+register again from each conversation after the notifier is replaced. The
+notifier creates `codex_queue_receipts.db` in the tabc home directory on its
+first Codex queue submission. See the
+[changelog](https://github.com/jultabc/tabc/blob/main/CHANGELOG.md).
+
 ## Updating from 0.1.6
 
 The upgrade preserves nodes, messages, delivery states, TAC membership, names,
@@ -80,6 +98,7 @@ python -m pip install --upgrade "tabc[mcp]==0.2.0"
 Existing string TAC IDs are not converted during installation. Follow the
 repository README's 0.2.0 ledger conversion procedure when converting TAC IDs
 to UUIDs. Without conversion, restart `tabd` first, then `tabus.doorbell`.
+Then follow "Updating from 0.2.0".
 
 ## Commands
 
@@ -91,7 +110,7 @@ to UUIDs. Without conversion, restart `tabd` first, then `tabus.doorbell`.
 - `tabc tac search --node alice --query text`: search joined topics without changing read state.
 
 Register each recipient before sending. tac creators must also join their topic.
-In 0.2.0, the server mints a UUID for each new tac. Use that UUID for membership,
+Since 0.2.0, the server mints a UUID for each new tac. Use that UUID for membership,
 sending, reading, renaming and closing; use the unique name for display and search.
 Run `tabc --help` for available commands. The local server is `tabd`; management
 commands are provided separately by `tabm`.
@@ -117,6 +136,15 @@ Terminal notifications require a separate notifier and a valid terminal route.
 Installation alone does not enable notifications. Automatic Enter defaults to off
 for new routes. Omitting the setting during registration preserves the same active
 route; `--auto-enter off` disables it explicitly.
+
+`register` requires `--kind`. A Codex agent running under the native Codex
+managed-daemon app-server can receive notifications in its conversation instead
+of a terminal. Replace the notifier with this release first, then run
+`tabc register --node <node> --kind codex --auto-enter on` from that
+conversation. `--codex-queue` requires that route with no terminal fallback.
+`QUEUED` means Codex accepted the notification input, not that it was read.
+This path was checked with codex-cli 0.162.1 on macOS only. See the repository
+README for conditions and limits.
 
 Do not connect notifications to an unreviewed command prompt.
 Automatic Enter does not guarantee a reply.
