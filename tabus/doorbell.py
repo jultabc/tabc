@@ -307,7 +307,7 @@ def format_doorbell_who(senders):
     return f"{senders[0]['sender']}"
 
 
-def deliver_doorbell(node_id, unread):
+def deliver_doorbell(node_id, unread, notification_id=None):
     """Attempt one delivery. Returns (outcome, adapter, match_count).
 
     🔴 It writes no ledger row; that belongs to the caller.
@@ -364,6 +364,10 @@ def deliver_doorbell(node_id, unread):
         return DELIVER_NOT_MINE, "-", 0
     adapter, target, *settings = route
     auto_enter = bool(settings[0]) if settings else False
+    if adapter == "codex-queue":
+        from .codex_queue import deliver_notification
+        result, matched = deliver_notification(target, notification_id, msg, auto_enter)
+        return result, adapter, matched
     # 🔴 The adapter dispatch stays an if-chain. It was briefly a name-to-function
     #   table and was reverted: the table freezes function references at import
     #   time, which stopped tests from substituting them — three of sixteen failed
@@ -470,7 +474,8 @@ def main():
                             flush=True,
                         )
                     continue
-                result, adapter, matched = deliver_doorbell(rcpt, d["unread"])
+                result, adapter, matched = deliver_doorbell(
+                    rcpt, d["unread"], notification_id=f"{rcpt}:{d['high_id']}")
                 # 🔴 An announcement overriding observation mode lands here too, and
                 #    the recorded mode stays as the mode it actually ran in — that is
                 #    the axis the watermark is measured on. Only the log tag differs.
