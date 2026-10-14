@@ -10,7 +10,8 @@ Receipt parsing requires exactly one success line on stdout. Additional stdout
 is treated as UNKNOWN even if submission may have succeeded.
 
 Rollout order: deploy and verify the updated doorbell daemon first, then
-register Hu with --codex-queue; an older daemon returns DELIVER_UNSUPPORTED.
+register each intended Codex node with the documented options; an older daemon
+returns DELIVER_UNSUPPORTED.
 """
 
 import os
