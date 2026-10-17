@@ -43,12 +43,10 @@ agent runs.
 
 See the [changelog](CHANGELOG.md) for release-specific changes and upgrade notes.
 
-> **0.2.2:** `--kind` is case-insensitive, so `--kind Codex` also selects the
-> Codex queue route. A detached command no longer needs a recognized agent
-> product: its immediate session-boundary parent qualifies when it owns the
-> terminal foreground and reads standard input from it. Register again from
-> the intended terminal after updating. See
-> [Upgrading from 0.2.1 to 0.2.2](#upgrading-from-021-to-022).
+> **0.2.3:** the CLI accepts the exact name of an open tac where it takes a tac,
+> and lists candidates instead of guessing. The server and the MCP adapter still
+> take only the UUID. Update the CLI and restart `tabd` together. See
+> [Upgrading from 0.2.2 to 0.2.3](#upgrading-from-022-to-023).
 
 It is meant to stay small enough to read. Count it rather than trust a number
 printed here — a baked total is stale by the next commit, which is why this
@@ -566,8 +564,20 @@ addressed to a node. The header `[dm]` and the command `dm` are different
 things that share a name.
 
 A **tac** (Topic Archive Capsule) is a named conversation. The server gives it
-a UUID when it is created. The name is for display and search; commands that
-change or address the tac use the UUID. Renaming does not change that UUID.
+a UUID when it is created. The name is for display and search. Renaming does
+not change that UUID. Tac names are unique after case folding, so an exact name
+matches at most one tac, open or closed.
+
+Commands that change or address the tac take its UUID. From 0.2.3, the CLI also
+accepts the exact name, compared after case folding. It looks the name up and runs only when the name
+belongs to exactly one open tac, after printing `tac <name> = <uuid>` on stderr.
+For a closed tac, a missing name, or names that only resemble it, the CLI runs
+nothing. It lists the candidates with their UUID and `open` or `closed` date,
+prints `code TAC_NAME_UNRESOLVED`, and exits 2. A partial name is never chosen.
+A canonical lowercase UUID is used as given. Any other value is looked up as a
+name first, so a tac whose name looks like a UUID is reached by its name.
+`tac create` takes the new name and does not look it up. The server and the MCP
+adapter still take only the UUID.
 Once closed, a tac cannot be reopened — the closing summary is the record.
 
 ### Working with a tac
@@ -592,6 +602,8 @@ tabc send --sender alice --tac <planning-uuid> \
 # Read it: ls lists the tacs, show reads one
 tabc tac ls --node alice
 tabc tac show <planning-uuid> --node bob
+# From 0.2.3 the CLI also accepts the exact name of an open tac
+tabc tac show planning --node bob
 # Only the returned messages advance to INJECTED. Acknowledge each full message
 # UUID as READ after reviewing it; older unreturned messages may still block send.
 tabc ack --node bob --id <message-uuid> --state READ
@@ -609,6 +621,36 @@ acting node (from `--node`, or `TABC_NODE`) in the audit. `ls`, `check`, and
 the returned deliveries advance to `INJECTED`, not `READ`. Use `ack` after
 reviewing each message. `search --query <text>` searches names, descriptions,
 subjects, and bodies without changing delivery state.
+
+### Upgrading from 0.2.2 to 0.2.3
+
+0.2.3 does not change the ledger schema. Nodes, signing keys, messages, delivery
+states, TACs, routes, and Codex queue receipts are kept. No conversion is needed.
+Registration is unchanged, so nodes do not need to register again.
+
+Use this order:
+
+```bash
+# First stop tabus.doorbell.
+
+# Install one of these packages.
+python -m pip install --upgrade "tabc==0.2.3"
+# Or, include the optional MCP adapter:
+python -m pip install --upgrade "tabc[mcp]==0.2.3"
+
+# Restart tabd, then start one tabus.doorbell from the same installation.
+tabc --version
+tabd --version
+```
+
+- Name lookup needs both sides. The CLI asks `tabd` for `/tac_lookup`. Until
+  `tabd` is restarted on 0.2.3, it answers 404, the CLI sends the typed name
+  unchanged, and the server refuses it with `TAC_ID_INVALID`. UUIDs keep
+  working either way.
+- The notifier and the MCP adapter did not change in 0.2.3. The notifier is
+  stopped and started again only to keep the restart order above. A running
+  `tabc-mcp` process does not need a restart for this change.
+- An upgrade from 0.2.1 follows the 0.2.2 notes below first.
 
 ### Upgrading from 0.2.1 to 0.2.2
 
@@ -706,8 +748,10 @@ Verify the reported row counts and the converted database before replacing the
 active database. Do not replace it while its WAL file is non-empty. A remaining
 empty WAL or SHM file is safe. Restart `tabd` first, then restart
 `tabus.doorbell`. `tabc tac ls` shows the new UUID next to each preserved name.
-After conversion, commands that use a TAC name instead of its UUID are refused
-with `TAC_ID_INVALID`. Scripts must use the UUID printed by `tabc tac ls`.
+After conversion, the server and the MCP adapter refuse a TAC name used instead
+of its UUID with `TAC_ID_INVALID`. From 0.2.3, the CLI resolves an exact open
+tac name to its UUID first. Scripts should use the UUID printed by `tabc tac ls`,
+which does not change when the tac is renamed.
 Do not run old and new daemons against one active ledger during the swap.
 Confirm the installed processes after restart:
 
