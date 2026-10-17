@@ -1,7 +1,7 @@
-"""Recognize a foreground native agent CLI, never a generic terminal ancestor.
+"""Verify a foreground terminal owner without a product-name allowlist.
 
 This is local routing evidence, not an isolation boundary against a malicious
-process running as the same OS user. Unknown launch modes fail closed.
+process running as the same OS user. Missing terminal evidence fails closed.
 """
 
 import ctypes
@@ -57,7 +57,7 @@ def executable_kind(executable, user_home):
 
 
 def interactive_arguments(kind, argv):
-    """Allow inspected interactive modes only; no arbitrary prompt/subcommand."""
+    """Legacy argument classifier; not used by generic route registration."""
     if not argv or os.path.basename(argv[0]) != kind:
         return False
     flags = {
@@ -120,11 +120,27 @@ def process_info(pid):
             fields[4], args)
 
 
+def input_terminal(pid):
+    """Resolve fd 0, not inherited environment variables or a process name."""
+    if sys.platform.startswith("linux"):
+        return os.path.realpath(os.readlink(f"/proc/{int(pid)}/fd/0"))
+    if sys.platform == "darwin":
+        result = subprocess.run(
+            ["/usr/sbin/lsof", "-a", "-p", str(int(pid)), "-d", "0", "-Fn"],
+            capture_output=True, text=True, timeout=1, check=False,
+        )
+        names = [line[1:] for line in result.stdout.splitlines() if line.startswith("n")]
+        if result.returncode == 0 and len(names) == 1:
+            return names[0]
+    return None
+
+
 def foreground_frontend_tty(pid, expected_tty, inspect=None, executable=None,
-                            uid=None, user_home=None):
+                            uid=None, user_home=None, stdin_terminal=None):
     """Only the boundary parent itself may qualify; never walk past a server."""
     inspect = inspect or process_info
     executable = executable or native_executable
+    stdin_terminal = stdin_terminal or input_terminal
     uid = os.getuid() if uid is None else uid
     try:
         user_home = pwd.getpwuid(uid).pw_dir if user_home is None else user_home
@@ -135,11 +151,15 @@ def foreground_frontend_tty(pid, expected_tty, inspect=None, executable=None,
         if owner != uid or not (pid == group == foreground) or tty != expected_tty:
             return None
         path = executable(pid)
-        kind = executable_kind(path, user_home) if path else None
-        if kind is None or not interactive_arguments(kind, argv):
+        # Generic terminal routing is independent of kind and installation path.
+        # The immediate boundary parent must own the foreground group AND read
+        # from that terminal. A pipe-backed server is not a terminal recipient.
+        input_path = "/dev/" + expected_tty.removeprefix("/dev/")
+        if not path or stdin_terminal(pid) != input_path:
             return None
         # Recheck mutable process state around executable and command inspection.
-        if inspect(pid) != before or executable(pid) != path:
+        if (inspect(pid) != before or executable(pid) != path
+                or stdin_terminal(pid) != input_path):
             return None
         return tty
     except (OSError, ValueError, TypeError, KeyError, ctypes.ArgumentError,
