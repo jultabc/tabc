@@ -251,6 +251,7 @@ def fn_config(a):
 
 def fn_register(a):
     node = _require_acting_node(a.node)
+    a.kind = a.kind.casefold()
     payload = {"node": node, "kind": a.kind}
     take_route = bool(getattr(a, "take_route", False))
     setting = getattr(a, "auto_enter", None)
