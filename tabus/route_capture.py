@@ -6,8 +6,8 @@ that terminal.  A detached shared runner can therefore carry one tab's route,
 allocate a fresh PTY, and still register the stale tab.  Route capture accepts
 the inherited key only when its resolved TTY equals the controlling TTY of this
 process or a same-session ancestor. A detached command may also use its immediate
-session-boundary parent when that parent is a recognized native interactive CLI
-and the foreground process-group leader of the target terminal.
+session-boundary parent when that parent owns the target terminal foreground
+process group and its standard input is that same terminal, regardless of kind.
 """
 
 import os
@@ -99,7 +99,7 @@ def terminal_tty(
 
     ``ps`` is used instead of ``/proc`` so this works on both macOS and Linux.
     Any lookup failure is a negative result. The cross-session fallback is
-    restricted to a checked native foreground CLI, not arbitrary ancestors.
+    restricted to a checked foreground terminal owner, not arbitrary ancestors.
     """
     inspect = process_row or _process_row
     inspect_session = process_session or _session_id
