@@ -1,6 +1,9 @@
 # Terminal routing in 0.2.2
 
-Status: review candidate. Installed runtime has not been replaced.
+Status: 0.2.2. One notification round trip was checked on macOS with OpenCode
+in iTerm2: registration with `--kind OpenCode --auto-enter on`, a notification
+shown before a manual pull, then the same message read and acknowledged. tmux
+and other operating systems were not checked.
 
 Registration normalizes `kind` to lowercase. Codex with automatic Enter enabled
 retains the Codex queue selection and its existing fallback rules. Other kinds
