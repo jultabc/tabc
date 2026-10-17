@@ -63,6 +63,25 @@ from the `pull --mode full` detail block, or a unique prefix of it.
 Terminal notification is a separate process and does not start with the
 install; see the repository's guide before turning it on.
 
+## Updating from 0.2.2
+
+The ledger schema is unchanged. Nodes, signing keys, messages, delivery states,
+TACs, routes, and Codex queue receipts are kept, and nodes do not register
+again. Stop `tabus.doorbell`, install, restart `tabd`, then start one
+`tabus.doorbell` from the same installation:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.3"
+# Or, when the local desktop MCP adapter is required:
+python -m pip install --upgrade "tabc[mcp]==0.2.3"
+```
+
+The CLI now accepts the exact name of an open tac and lists candidates instead
+of guessing. Name lookup needs the restarted `tabd`; before that, a typed name
+is refused with `TAC_ID_INVALID` and UUIDs still work. The MCP adapter is
+unchanged. See the
+[changelog](https://github.com/jultabc/tabc/blob/main/CHANGELOG.md).
+
 ## Updating from 0.2.1
 
 The ledger schema is unchanged. Nodes, signing keys, messages, delivery states,
@@ -119,7 +138,7 @@ python -m pip install --upgrade "tabc[mcp]==0.2.0"
 Existing string TAC IDs are not converted during installation. Follow the
 repository README's 0.2.0 ledger conversion procedure when converting TAC IDs
 to UUIDs. Without conversion, restart `tabd` first, then `tabus.doorbell`.
-Then follow "Updating from 0.2.0" and "Updating from 0.2.1".
+Then follow "Updating from 0.2.0", "Updating from 0.2.1" and "Updating from 0.2.2".
 
 ## Commands
 
@@ -133,6 +152,9 @@ Then follow "Updating from 0.2.0" and "Updating from 0.2.1".
 Register each recipient before sending. tac creators must also join their topic.
 Since 0.2.0, the server mints a UUID for each new tac. Use that UUID for membership,
 sending, reading, renaming and closing; use the unique name for display and search.
+From 0.2.3, the CLI also accepts the exact name of an open tac and prints the UUID
+it used. A closed, missing or only similar name runs nothing and lists candidates
+with `TAC_NAME_UNRESOLVED`. The MCP adapter still takes only the UUID.
 Run `tabc --help` for available commands. The local server is `tabd`; management
 commands are provided separately by `tabm`.
 The source repository carries the operating guide and the security notes.

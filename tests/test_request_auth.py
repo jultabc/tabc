@@ -130,6 +130,23 @@ try:
     check("search refuses unbounded limit", code == 400)
     code, _ = _signed(port, "GET", "/tac_search?q=x&q=y", "alice", alice_key)
     check("search refuses ambiguous duplicate query", code == 400)
+    # Name lookup (0.2.3): read-only, signed, the same scope as /tacs.
+    tabus.bus_tac_create(con, "private-notes", None, by="alice")
+    con.commit()
+    before = list(con.iterdump())
+    path = "/tac_lookup?" + urlencode({"name": "PRIVATE"})
+    check("unsigned lookup refused", _unsigned(port, "GET", path) == 401)
+    code, result = _signed(port, "GET", path, "alice", alice_key)
+    check("lookup answers the folded exact name",
+          code == 200 and result["exact"]["tac_id"] == private
+          and result["exact"]["closed_at"] is None)
+    check("lookup lists the other names containing it",
+          code == 200 and [r["name"] for r in result["similar"]] == ["private-notes"])
+    check("lookup leaves the DB unchanged", list(con.iterdump()) == before)
+    code, _ = _signed(port, "GET", "/tac_lookup?name=a&name=b", "alice", alice_key)
+    check("lookup refuses a duplicate query", code == 400)
+    code, _ = _signed(port, "GET", "/tac_lookup", "alice", alice_key)
+    check("lookup refuses a missing name", code == 400)
     con.close()
 finally:
     server.shutdown()
