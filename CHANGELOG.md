@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.2.3 — Unreleased
+
+### Added
+
+- The CLI accepts the exact name of an open tac, compared after case folding,
+  wherever it takes a tac:
+  `tac show`, `add`, `rm`, `rename` (the target, not the new name), `close`,
+  `link` (child and parent), `search --tac`, and `send --tac`. It prints
+  `tac <name> = <uuid>` on stderr and runs with that UUID.
+- A closed tac, a missing name, or names that only resemble the input run
+  nothing. The CLI lists the candidates with UUID and `open` or `closed` date,
+  prints `code TAC_NAME_UNRESOLVED`, and exits 2. A partial name is never
+  chosen.
+- A read-only, signed server endpoint, `GET /tac_lookup?name=`, returns the
+  exact match and up to 20 similar names within the same scope as `/tacs`.
+
+### Unchanged
+
+- `tac create` does not look up its name.
+- A canonical lowercase UUID is used as given, without a lookup. Any other
+  string is looked up as a name first. Only when no tac has that exact name is
+  another spelling of a UUID (upper case, braces, 32 hex digits, `urn:uuid:`)
+  sent as that identifier.
+- Every other server endpoint and the MCP adapter take only the UUID. An older
+  `tabd` without the lookup endpoint receives the typed value unchanged,
+  including another UUID spelling, and answers `TAC_ID_INVALID` as before.
+- The ledger schema, registration, the notifier, and the MCP adapter are
+  unchanged.
+
+### Upgrade notes (from 0.2.2)
+
+- Nodes, signing keys, messages, delivery states, TACs, routes, and Codex
+  queue receipts are kept. No conversion and no re-registration are needed.
+- Stop `tabus.doorbell`, install 0.2.3, restart `tabd`, then start one
+  `tabus.doorbell` from the same installation:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.3"
+# Or, for desktop MCP support:
+python -m pip install --upgrade "tabc[mcp]==0.2.3"
+```
+
+- Name lookup needs the restarted `tabd`. Before the restart it answers 404 for
+  `/tac_lookup`, the CLI sends the typed name, and the server answers
+  `TAC_ID_INVALID`. UUIDs work either way.
+- A running `tabc-mcp` process does not need a restart for this change.
+- After restart, `tabc --version` and `tabd --version` report 0.2.3.
+
 ## 0.2.2 — 2026-10-17
 
 ### Changed

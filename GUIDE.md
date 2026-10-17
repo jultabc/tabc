@@ -269,11 +269,18 @@ tabd returns a stable `code`, a plain `message`, structured `details`, and a
 | `REQUEST_TIMEOUT` | the declared request body did not arrive within 30 seconds |
 | `REQUEST_INCOMPLETE` | the connection ended before the declared body length arrived |
 | `UNREAD_BLOCKED` | read-before-send is blocking this DM or TAC send |
-| `TAC_ID_INVALID` | a TAC operation requires a canonical lowercase UUID |
+| `TAC_ID_INVALID` | a TAC operation requires a canonical lowercase UUID; the server does not resolve names |
 | `TAC_NOT_FOUND` | no TAC matches the supplied identifier |
 | `TAC_NAME_TAKEN` | the folded name or a reserved legacy identifier is already used |
 | `TAC_NAME_INVALID` | the TAC name violates the name rules |
 | `TAC_NOT_CONVERTED` | a partially converted ledger still contains string TAC IDs |
+
+From 0.2.3, the CLI adds one code of its own before the requested TAC operation is sent.
+`TAC_NAME_UNRESOLVED` means the TAC name was not exactly one open tac: it is
+closed, missing, or only similar names exist. Nothing was done. The CLI lists the
+candidates with UUID and state on stderr and exits 2. Use a listed UUID, or check
+the name with `tabc tac ls`. The lookup accepts names of 1 to 200 characters. A
+longer value fails the lookup, runs nothing, and exits 1; use the UUID instead.
 
 `retry=never` means change the request. `retry=after_condition` means satisfy the
 reported condition first. `retry=as_is` means the same request may be tried again,
@@ -295,7 +302,7 @@ The same visible text can therefore use different byte counts in NFC and NFD.
 | dm | a message addressed to named recipients (`send --to`) |
 | tac | a named topic. Members receive everything posted to it |
 | tac name | a unique display and search name. It can change |
-| tac id | a canonical UUID minted by the server. It addresses the tac and does not change when the name changes |
+| tac id | a canonical UUID minted by the server. It addresses the tac and does not change when the name changes. From 0.2.3 the CLI also resolves an exact open tac name to it |
 | program | a send-only node. It claims no terminal and is refused as a recipient |
 
 ---
