@@ -498,6 +498,27 @@ class BusHandler(BaseHTTPRequestHandler):
                 con.close()
             return self._json(200, {"hits": hits})
 
+        if path == "/tac_lookup":
+            # 🔴 Read-only: which tac carries this name now. Same scope as /tacs. The
+            #    client sends the identifier this returns; every other endpoint still
+            #    takes only the identifier.
+            if not self._authorized():
+                return self._json(401, {"error": "token"})
+            from urllib.parse import parse_qs
+            from .tac_lookup import lookup
+
+            params = parse_qs(query, keep_blank_values=True)
+            if any(len(values) != 1 for values in params.values()):
+                return self._json(400, {"error": "duplicate query parameters"})
+            con = self._connect()
+            try:
+                exact, similar = lookup(con, params.get("name", [None])[0])
+            except (ValueError, TypeError) as exc:
+                return self._json(400, {"error": str(exc)})
+            finally:
+                con.close()
+            return self._json(200, {"exact": exact, "similar": similar})
+
         if path == "/tac_messages":
             # 🔴 tac contents, read-only, and member-only: a tac is a conversation you
             #    read by joining it, so only its members see the body. A non-member is
