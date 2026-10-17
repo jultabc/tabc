@@ -14,7 +14,8 @@
   the route is accepted. Product names and install directories are not an
   admission list.
 - Codex queue selection under `--kind codex --auto-enter on` and its fallback
-  rules are unchanged.
+  rules are unchanged. Because the kind is case-folded, `--kind Codex` now
+  selects the same queue route.
 
 ### Notes
 
