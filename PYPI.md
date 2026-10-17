@@ -75,11 +75,13 @@ python -m pip install --upgrade "tabc==0.2.2"
 python -m pip install --upgrade "tabc[mcp]==0.2.2"
 ```
 
-`--kind` is now case-insensitive. Terminal routes no longer depend on a
-recognized agent product: any kind can use the common iTerm2 or tmux route when
-the terminal check passes. The check proves terminal ownership, not that the
-program is an agent. Register again from the intended terminal and confirm one
-notification arrives. Codex queue selection is unchanged. See the
+`--kind` is now case-insensitive; `--kind Codex` selects the same Codex queue
+route as `--kind codex`. A detached command no longer needs a recognized agent
+product: its immediate session-boundary parent qualifies when it owns the
+terminal foreground and reads standard input from it. The check proves terminal
+ownership, not that the program is an agent. Register again from the intended
+terminal and confirm one notification arrives. Codex queue rules are otherwise
+unchanged. See the
 [changelog](https://github.com/jultabc/tabc/blob/main/CHANGELOG.md).
 
 ## Updating from 0.2.0

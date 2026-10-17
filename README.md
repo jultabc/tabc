@@ -43,10 +43,11 @@ agent runs.
 
 See the [changelog](CHANGELOG.md) for release-specific changes and upgrade notes.
 
-> **0.2.2:** `--kind` is case-insensitive. Terminal routes no longer depend
-> on a recognized agent product; any kind can use the common iTerm2 or tmux
-> route when the terminal check passes. Codex queue selection is unchanged.
-> Register again from the intended terminal after updating. See
+> **0.2.2:** `--kind` is case-insensitive, so `--kind Codex` also selects the
+> Codex queue route. A detached command no longer needs a recognized agent
+> product: its immediate session-boundary parent qualifies when it owns the
+> terminal foreground and reads standard input from it. Register again from
+> the intended terminal after updating. See
 > [Upgrading from 0.2.1 to 0.2.2](#upgrading-from-021-to-022).
 
 It is meant to stay small enough to read. Count it rather than trust a number
