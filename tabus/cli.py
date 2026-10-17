@@ -94,6 +94,7 @@ MAPPING = {
     "tac_link": "/tac_link",
     "tac_rename": "/tac_rename",
     "tac_check": "/tac_check",
+    "tac_lookup": "/tac_lookup",
     # name uses only the register endpoint; setting the session title is local
 }
 
@@ -440,6 +441,8 @@ def fn_send(a):
     if a.body_file:
         body = open(a.body_file, encoding="utf-8").read()
     group = getattr(a, "tac", None)
+    if group:
+        group = _designate_tac(group, a.sender)
     bcast = getattr(a, "broadcast", False)
     requested = _recipients(a.to)
     # 🔴 Recipients come from --to, --tac, or --broadcast. With none of the three
@@ -806,6 +809,64 @@ def fn_restore(a):
         sys.exit(1)
 
 
+def _tac_state(row):
+    closed = row.get("closed_at")
+    return f"closed {closed[:10]}" if closed else "open"
+
+
+def _designate_tac(given, node):
+    """A tac argument → the identifier to send. A name is looked up here, in the client.
+
+    🔴 The server still takes only the identifier. A name is turned into one before the
+    request, and the identifier used is printed on stderr, so a later rename cannot
+    make the record ambiguous. Only an exact name of an open tac is used. A closed tac,
+    or no exact match, prints the candidates with identifier and open/closed and
+    exits 2 without doing anything. A partial name is never chosen for the caller.
+    """
+    from .tac_identity import is_uuid_id
+
+    if not isinstance(given, str) or not given.strip() or is_uuid_id(given):
+        return given
+    try:
+        # Another UUID spelling (uppercase, braces, 32 hex digits) of an identifier.
+        spelled = str(uuid.UUID(given.strip()))
+    except ValueError:
+        spelled = None
+    from urllib.parse import urlencode
+
+    # 🔴 The name is asked first, even for a string uuid.UUID can read: a tac may be
+    #    named "0123456789abcdef0123456789abcdef", and that name must not turn into
+    #    some other tac's identifier (jack 4c84df2c). Only with no tac of that exact
+    #    name is the string read as an identifier spelling.
+    code, r = call("GET", MAPPING["tac_lookup"] + "?" + urlencode({"name": given}), node=node)
+    if code == 404:
+        # 🔴 A server before this lookup existed: send the string as typed, and the
+        #    server answers TAC_ID_INVALID as it always did.
+        return given
+    if code != 200 or r.get("error"):
+        print(f"failed: tac lookup: {r.get('error') or r}", file=sys.stderr)
+        sys.exit(1)
+    exact, similar = r.get("exact"), r.get("similar") or []
+    if exact is None and spelled is not None:
+        return spelled
+    if exact and not exact.get("closed_at"):
+        print(f"tac {exact['name']} = {exact['tac_id']}", file=sys.stderr)
+        return exact["tac_id"]
+    rows = ([exact] if exact else []) + similar
+    if exact:
+        print(f"tac {exact['name']} is closed; nothing was done. Use its identifier to read it:",
+              file=sys.stderr)
+    elif rows:
+        print(f"no tac is named {given!r}; nothing was done. Similar names:", file=sys.stderr)
+    else:
+        print(f"no tac is named {given!r}; nothing was done (list them with: tabc tac ls)",
+              file=sys.stderr)
+    for row in rows:
+        print(f"  {row['name']:<24} {row['tac_id']}  {_tac_state(row)}", file=sys.stderr)
+    print("  code TAC_NAME_UNRESOLVED", file=sys.stderr)
+    sys.exit(2)
+
+
 def fn_tac(a):
     """tac — a named topic for group delivery.
 
@@ -818,6 +879,12 @@ def fn_tac(a):
     from another, which covers direction, forks, and merges.
     """
     action = a.action
+    # 🔴 Every subcommand that takes an existing tac accepts a name here and sends the
+    #    identifier. create takes a new name and is not looked up.
+    if action in ("show", "add", "rm", "rename", "close", "link") or (action == "search" and a.tac):
+        a.tac = _designate_tac(a.tac, a.node)
+        if action == "link":
+            a.member = _designate_tac(a.member, a.node)
     if action == "search":
         from urllib.parse import urlencode
 
@@ -1135,7 +1202,7 @@ COMMANDS = {
                 ("--tac",),
                 dict(
                     default=None,
-                    help="send to a tac, fanning out to every member (instead of --to)",
+                    help="send to a tac, by identifier or exact name, fanning out to every member (instead of --to)",
                 ),
             ),
             (
@@ -1235,8 +1302,9 @@ COMMANDS = {
                     "close <tac> --summary | link <child> <parent>",
                 ),
             ),
-            (("tac",), dict(nargs="?", help="the tac, by its identifier (not needed for ls); "
-                                            "find it with ls or search; for link this is the child")),
+            (("tac",), dict(nargs="?", help="the tac, by its identifier or its exact name (not needed for ls); "
+                                            "a name is looked up and the identifier used is printed; "
+                                            "for create this is the new name; for link this is the child")),
             (("member",), dict(nargs="?", help="node for add and rm; for link this is the parent; "
                                                "for rename this is the new name")),
             (("--description",), dict(default=None, help="what the tac is for, for create")),
