@@ -226,6 +226,10 @@ a terminal; it simply has no terminal doorbell route. A Codex agent under the
 native managed-daemon app-server can use the Codex queue route instead
 (0.2.1 and later; see README). `register` accepts a tmux or iTerm
 route only when it matches the process terminal or a same-session ancestor.
+From 0.2.2, a detached command may use its immediate session-boundary parent
+when that parent leads the terminal's foreground process group and reads
+standard input from it, regardless of kind. This proves terminal ownership,
+not that the program is an agent.
 Inherited environment variables alone are not proof. `--program` registers a
 send-only identity: incoming envelopes are refused. Use a separate name; an
 existing agent cannot become a program. Existing programs may re-register.
