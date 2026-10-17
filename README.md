@@ -43,10 +43,12 @@ agent runs.
 
 See the [changelog](CHANGELOG.md) for release-specific changes and upgrade notes.
 
-> **0.2.1:** `register` requires `--kind`. A Codex agent can receive
-> notifications through the Codex queue adapter. Scripts that call `register`
-> without `--kind` must add it. See
-> [Upgrading from 0.2.0 to 0.2.1](#upgrading-from-020-to-021).
+> **0.2.2:** `--kind` is case-insensitive, so `--kind Codex` also selects the
+> Codex queue route. A detached command no longer needs a recognized agent
+> product: its immediate session-boundary parent qualifies when it owns the
+> terminal foreground and reads standard input from it. Register again from
+> the intended terminal after updating. See
+> [Upgrading from 0.2.1 to 0.2.2](#upgrading-from-021-to-022).
 
 It is meant to stay small enough to read. Count it rather than trust a number
 printed here — a baked total is stale by the next commit, which is why this
@@ -192,10 +194,19 @@ tabc register --node alice --kind codex --auto-enter on
 `register` requires `--node` and `--kind`. With `--kind codex --auto-enter on`,
 it first checks whether it can select the current Codex queue route. See the
 [Codex adapter](#how-do-i-get-notifications-in-a-codex-thread) for requirements.
-Without a queue route, terminal capture inspects `TMUX`/`TMUX_PANE` and
-`ITERM_SESSION_ID` and accepts a route only when
-the target terminal matches this process's controlling terminal or a same-session
-ancestor's terminal. Piped output alone does not prevent registration; inherited
+`--kind` is case-insensitive and is stored in lowercase: `--kind OpenCode`
+registers `opencode`. Without a queue route, terminal capture inspects
+`TMUX`/`TMUX_PANE` and `ITERM_SESSION_ID` and accepts a route only when the
+target terminal matches this process's controlling terminal or a same-session
+ancestor's terminal. A detached command may instead use its immediate
+session-boundary parent. That parent must belong to the same OS user, lead the
+target terminal's foreground process group, and read standard input from that
+terminal. Process state, executable path, and standard input are checked again
+before the route is accepted. The kind and the product name are not part of
+this check. It verifies terminal ownership, not whether the program is an
+agent: a foreground program that reads the terminal can qualify even if it is
+not one. Do not register a node from a terminal that will later run an
+unrelated program. Piped output alone does not prevent registration; inherited
 variables alone do not prove attachment. A rejected inherited route is not sent
 and does not revoke or replace an existing route. Without `--auto-enter on`,
 registration with no verified route preserves existing routes; use `read` when
@@ -598,6 +609,38 @@ acting node (from `--node`, or `TABC_NODE`) in the audit. `ls`, `check`, and
 the returned deliveries advance to `INJECTED`, not `READ`. Use `ack` after
 reviewing each message. `search --query <text>` searches names, descriptions,
 subjects, and bodies without changing delivery state.
+
+### Upgrading from 0.2.1 to 0.2.2
+
+0.2.2 does not change the ledger schema. Nodes, signing keys, messages, delivery
+states, TACs, routes, and Codex queue receipts are kept. No conversion is needed.
+
+Use this order:
+
+```bash
+# First stop tabus.doorbell.
+
+# Install one of these packages.
+python -m pip install --upgrade "tabc==0.2.2"
+# Or, include the optional MCP adapter:
+python -m pip install --upgrade "tabc[mcp]==0.2.2"
+
+# Restart tabd, then start one tabus.doorbell from the same installation.
+tabc --version
+tabd --version
+```
+
+- Stored routes are not changed by the upgrade. A failed capture does not
+  replace an existing route.
+- To use the 0.2.2 terminal check, register again from the intended terminal,
+  then confirm that one notification arrives before relying on it.
+- Codex queue registration keeps the rules in
+  [How do I get notifications in a Codex thread?](#how-do-i-get-notifications-in-a-codex-thread)
+- No dedicated adapter for another agent product is added. The MCP adapter
+  still does not wake an agent. If a desktop client runs `tabc-mcp`, restart
+  that MCP process from the client after the upgrade so it loads the new
+  installation.
+- An upgrade from 0.2.0 follows the 0.2.1 notes below first.
 
 ### Upgrading from 0.2.0 to 0.2.1
 

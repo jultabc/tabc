@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.2.2 — 2026-10-17
+
+### Changed
+
+- `register` treats `--kind` case-insensitively and stores it in lowercase.
+  `--kind OpenCode` registers `opencode`.
+- Terminal route capture at a detached session boundary no longer requires a
+  recognized Codex or Claude CLI. The immediate session-boundary parent
+  qualifies when it belongs to the same OS user, leads the target terminal's
+  foreground process group, and reads standard input from that terminal.
+  Process state, executable path, and standard input are checked again before
+  the route is accepted. Product names and install directories are not an
+  admission list.
+- Codex queue selection under `--kind codex --auto-enter on` and its fallback
+  rules are unchanged. Because the kind is case-folded, `--kind Codex` now
+  selects the same queue route.
+
+### Notes
+
+- The check verifies terminal ownership, not whether the program is an agent.
+  A foreground program that reads the terminal can qualify even if it is not
+  an agent. Automatic Enter remains a separate opt-in.
+- No dedicated adapter for another agent product is added. The MCP adapter
+  still does not wake an agent.
+
+### Upgrade notes (from 0.2.1)
+
+- The ledger schema is unchanged. Nodes, signing keys, messages, delivery
+  states, TACs, routes, and Codex queue receipts are kept.
+- Stop `tabus.doorbell`, install 0.2.2, restart `tabd`, then start one
+  `tabus.doorbell` from the same installation:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.2"
+# Or, for desktop MCP support:
+python -m pip install --upgrade "tabc[mcp]==0.2.2"
+```
+
+- Stored routes are not migrated. A failed capture does not replace an
+  existing route. Register again from the intended terminal, then confirm one
+  notification arrives.
+- If a desktop client runs `tabc-mcp`, restart that MCP process from the client
+  after the upgrade so it loads the new installation.
+- After restart, `tabc --version` and `tabd --version` report 0.2.2.
+
 ## 0.2.1 — 2026-10-15
 
 ### Added

@@ -1,4 +1,4 @@
-"""Foreground CLI evidence rejects server children and unrecognized binaries."""
+"""Generic foreground terminal evidence rejects detached and pipe-backed callers."""
 import sys
 import unittest
 import ctypes
@@ -10,11 +10,11 @@ from tabus import terminal_frontend as frontend
 
 
 class FrontendTests(unittest.TestCase):
-    def probe(self, *, info=None, path=None):
+    def probe(self, *, info=None, path=None, input_path="/dev/ttys000"):
         return frontend.foreground_frontend_tty(
             20, "ttys000", inspect=lambda _: info or (501, 10, 20, 20, "ttys000", ["codex"]),
             executable=lambda _: path or "/users/test/.codex/packages/standalone/releases/0.153.4/bin/codex",
-            uid=501, user_home="/users/test")
+            uid=501, user_home="/users/test", stdin_terminal=lambda _: input_path)
 
     def test_foreground_native_cli(self):
         self.assertEqual(self.probe(), "ttys000")
@@ -27,7 +27,8 @@ class FrontendTests(unittest.TestCase):
             with self.subTest(args=args):
                 path = ("/opt/homebrew/Caskroom/claude-code@latest/2.1.259/claude"
                         if args[0] == "claude" else None)
-                self.assertIsNone(self.probe(info=(501, 10, 20, 20, "ttys000", args), path=path))
+                self.assertIsNone(self.probe(info=(501, 10, 20, 20, "ttys000", args), path=path,
+                                             input_path="pipe"))
 
     def test_detached_command_accepts_only_checked_immediate_frontend(self):
         from tabus import route_capture
@@ -54,10 +55,22 @@ class FrontendTests(unittest.TestCase):
                     (502, 10, 20, 20, "ttys000", ["codex"])):
             self.assertIsNone(self.probe(info=row))
 
-    def test_name_alone_is_insufficient(self):
+    def test_generic_foreground_terminal_does_not_require_product_allowlist(self):
         for path in ("/tmp/codex", "/tmp/claude", "/usr/bin/python3",
                      "/users/test/.codex/packages/standalone/releases/0.1/bin/codex-extra"):
-            self.assertIsNone(self.probe(path=path))
+            self.assertEqual(self.probe(path=path), "ttys000")
+        self.assertEqual(self.probe(path="/users/test/.opencode/bin/opencode",
+            info=(501, 10, 20, 20, "ttys000", ["opencode"])), "ttys000")
+
+    def test_input_terminal_required_even_for_known_product(self):
+        for value in (None, "pipe", "/dev/null", "/dev/ttys999"):
+            self.assertIsNone(self.probe(input_path=value))
+
+    def test_missing_executable_path_is_rejected(self):
+        self.assertIsNone(frontend.foreground_frontend_tty(
+            20, "ttys000", inspect=lambda _: (501, 10, 20, 20, "ttys000", ["opencode"]),
+            executable=lambda _: None, uid=501,
+            stdin_terminal=lambda _: "/dev/ttys000"))
 
     def test_resume_modes_and_unknown_launches(self):
         identifier = "9c128700-6f6d-4d47-abcc-2a9de98a9336"
@@ -89,7 +102,22 @@ class FrontendTests(unittest.TestCase):
         self.assertIsNone(frontend.foreground_frontend_tty(
             20, "ttys000", inspect=lambda _: next(rows),
             executable=lambda _: "/users/test/.codex/packages/standalone/releases/0.153.4/bin/codex",
-            uid=501, user_home="/users/test"))
+            uid=501, user_home="/users/test", stdin_terminal=lambda _: "/dev/ttys000"))
+
+    def test_input_changes_during_check_are_rejected(self):
+        inputs = iter(["/dev/ttys000", "pipe"])
+        self.assertIsNone(frontend.foreground_frontend_tty(
+            20, "ttys000", inspect=lambda _: (501, 10, 20, 20, "ttys000", ["opencode"]),
+            executable=lambda _: "/opt/bin/opencode", uid=501,
+            stdin_terminal=lambda _: next(inputs)))
+
+    def test_macos_input_lookup_fails_closed(self):
+        for result in (Mock(returncode=1, stdout="n/dev/ttys000\n"),
+                       Mock(returncode=0, stdout=""),
+                       Mock(returncode=0, stdout="n/dev/ttys000\nn/dev/ttys001\n")):
+            with patch.object(frontend.sys, "platform", "darwin"), \
+                 patch.object(frontend.subprocess, "run", return_value=result):
+                self.assertIsNone(frontend.input_terminal(20))
 
     def test_frontend_change_during_terminal_query_is_rejected(self):
         from tabus import route_capture

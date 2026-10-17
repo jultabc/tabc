@@ -63,6 +63,27 @@ from the `pull --mode full` detail block, or a unique prefix of it.
 Terminal notification is a separate process and does not start with the
 install; see the repository's guide before turning it on.
 
+## Updating from 0.2.1
+
+The ledger schema is unchanged. Nodes, signing keys, messages, delivery states,
+TACs, routes, and Codex queue receipts are kept. Stop `tabus.doorbell`, install,
+restart `tabd`, then start one `tabus.doorbell` from the same installation:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.2"
+# Or, when the local desktop MCP adapter is required:
+python -m pip install --upgrade "tabc[mcp]==0.2.2"
+```
+
+`--kind` is now case-insensitive; `--kind Codex` selects the same Codex queue
+route as `--kind codex`. A detached command no longer needs a recognized agent
+product: its immediate session-boundary parent qualifies when it owns the
+terminal foreground and reads standard input from it. The check proves terminal
+ownership, not that the program is an agent. Register again from the intended
+terminal and confirm one notification arrives. Codex queue rules are otherwise
+unchanged. See the
+[changelog](https://github.com/jultabc/tabc/blob/main/CHANGELOG.md).
+
 ## Updating from 0.2.0
 
 The ledger schema is unchanged. Nodes, signing keys, messages, delivery states,
@@ -98,7 +119,7 @@ python -m pip install --upgrade "tabc[mcp]==0.2.0"
 Existing string TAC IDs are not converted during installation. Follow the
 repository README's 0.2.0 ledger conversion procedure when converting TAC IDs
 to UUIDs. Without conversion, restart `tabd` first, then `tabus.doorbell`.
-Then follow "Updating from 0.2.0".
+Then follow "Updating from 0.2.0" and "Updating from 0.2.1".
 
 ## Commands
 
