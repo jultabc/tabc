@@ -227,6 +227,18 @@ class RegistrationTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(call.call_args.args[2]["adapter"], "codex-queue")
 
+    def test_kind_case_does_not_change_adapter_selection(self):
+        for kind in ("Codex", "CODEX", "cOdEx"):
+            code, call = self.invoke(kind=kind, codex_queue=False)
+            self.assertEqual(code, 0)
+            self.assertEqual(call.call_args.args[2]["kind"], "codex")
+            self.assertEqual(call.call_args.args[2]["adapter"], "codex-queue")
+        for kind in ("OpenCode", "OPENCODE", "SomeFutureCLI"):
+            code, call = self.invoke(kind=kind, codex_queue=False, terminal=("tmux", "%42"))
+            self.assertEqual(code, 0)
+            self.assertEqual(call.call_args.args[2]["kind"], kind.casefold())
+            self.assertEqual(call.call_args.args[2]["adapter"], "tmux")
+
     def test_automatic_fallback_preserves_terminal_target(self):
         code, call = self.invoke(codex_queue=False, capture=None, terminal=("tmux", "%42"))
         self.assertEqual(code, 0)
