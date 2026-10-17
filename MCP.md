@@ -114,7 +114,8 @@ titles without that wait, including messages claimed by an earlier call. Use
 
 Use the CLI to create TACs and manage membership. Use the `tac_id` returned by
 `tabc_tacs`, not its display name. A TAC name can be renamed; its canonical UUID
-does not change. TAC history inspection does not change delivery state. Before
+does not change. The CLI resolves an exact open tac name from 0.2.3; the MCP
+adapter does not. TAC history inspection does not change delivery state. Before
 sending, open and acknowledge the relevant pending deliveries using the inbox
 tools. tabd enforces the same read-before-send rules as it does for the CLI.
 
