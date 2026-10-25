@@ -314,8 +314,8 @@ those checks, the daemon stores one message per id:
 
 - The same id with the same envelope (sender, recipients, subject, body,
   priority) is a resend and exits 0. The first line is still
-  `stored id=<id>`; the line below it reads
-  `identical envelope resent — not stored twice`.
+  `stored id=<id>`; the indented line below it reads
+  `(identical envelope resent — not stored twice)`.
 - The same id with a changed envelope is refused with `failed: conflict: …`
   and exit 1. The stored message is unchanged.
 
