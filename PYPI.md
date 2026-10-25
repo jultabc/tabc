@@ -9,6 +9,16 @@ This is an experimental package. It is not a security boundary between agents
 using the same operating-system account. Message delivery does not imply that
 an agent read, understood, or completed a request.
 
+## Updates
+
+See the [changelog](https://github.com/jultabc/tabc/blob/main/CHANGELOG.md)
+for changes and compatibility notes, or
+[GitHub releases](https://github.com/jultabc/tabc/releases) for published versions.
+
+Before updating an existing installation, follow the
+[installation and upgrade instructions](https://github.com/jultabc/tabc#readme).
+Keep a backup and follow the stop, install, and restart sequence for your version.
+
 ## Install
 
 ```bash
@@ -62,83 +72,6 @@ from the `pull --mode full` detail block, or a unique prefix of it.
 
 Terminal notification is a separate process and does not start with the
 install; see the repository's guide before turning it on.
-
-## Updating from 0.2.2
-
-The ledger schema is unchanged. Nodes, signing keys, messages, delivery states,
-TACs, routes, and Codex queue receipts are kept, and nodes do not register
-again. Stop `tabus.doorbell`, install, restart `tabd`, then start one
-`tabus.doorbell` from the same installation:
-
-```bash
-python -m pip install --upgrade "tabc==0.2.3"
-# Or, when the local desktop MCP adapter is required:
-python -m pip install --upgrade "tabc[mcp]==0.2.3"
-```
-
-The CLI now accepts the exact name of an open tac and lists candidates instead
-of guessing. Name lookup needs the restarted `tabd`; before that, a typed name
-is refused with `TAC_ID_INVALID` and UUIDs still work. The MCP adapter is
-unchanged. See the
-[changelog](https://github.com/jultabc/tabc/blob/main/CHANGELOG.md).
-
-## Updating from 0.2.1
-
-The ledger schema is unchanged. Nodes, signing keys, messages, delivery states,
-TACs, routes, and Codex queue receipts are kept. Stop `tabus.doorbell`, install,
-restart `tabd`, then start one `tabus.doorbell` from the same installation:
-
-```bash
-python -m pip install --upgrade "tabc==0.2.2"
-# Or, when the local desktop MCP adapter is required:
-python -m pip install --upgrade "tabc[mcp]==0.2.2"
-```
-
-`--kind` is now case-insensitive; `--kind Codex` selects the same Codex queue
-route as `--kind codex`. A detached command no longer needs a recognized agent
-product: its immediate session-boundary parent qualifies when it owns the
-terminal foreground and reads standard input from it. The check proves terminal
-ownership, not that the program is an agent. Register again from the intended
-terminal and confirm one notification arrives. Codex queue rules are otherwise
-unchanged. See the
-[changelog](https://github.com/jultabc/tabc/blob/main/CHANGELOG.md).
-
-## Updating from 0.2.0
-
-The ledger schema is unchanged. Nodes, signing keys, messages, delivery states,
-TACs, and routes are kept. Stop `tabus.doorbell`, install, restart `tabd`, then
-start one `tabus.doorbell` from the same installation:
-
-```bash
-python -m pip install --upgrade "tabc==0.2.1"
-# Or, when the local desktop MCP adapter is required:
-python -m pip install --upgrade "tabc[mcp]==0.2.1"
-```
-
-`register` now requires `--kind`. Update scripts that omit it. Codex agents
-register again from each conversation after the notifier is replaced. The
-notifier creates `codex_queue_receipts.db` in the tabc home directory on its
-first Codex queue submission. See the
-[changelog](https://github.com/jultabc/tabc/blob/main/CHANGELOG.md).
-
-## Updating from 0.1.6
-
-The upgrade preserves nodes, messages, delivery states, TAC membership, names,
-and labels. Stop `tabus.doorbell` and `tabd`. Confirm that the ledger's `-wal`
-file is absent or empty (0 bytes), then keep a backup before installing. A
-remaining empty WAL or SHM file is safe. Do not continue while the WAL is
-non-empty:
-
-```bash
-python -m pip install --upgrade "tabc==0.2.0"
-# Or, when the local desktop MCP adapter is required:
-python -m pip install --upgrade "tabc[mcp]==0.2.0"
-```
-
-Existing string TAC IDs are not converted during installation. Follow the
-repository README's 0.2.0 ledger conversion procedure when converting TAC IDs
-to UUIDs. Without conversion, restart `tabd` first, then `tabus.doorbell`.
-Then follow "Updating from 0.2.0", "Updating from 0.2.1" and "Updating from 0.2.2".
 
 ## Commands
 
