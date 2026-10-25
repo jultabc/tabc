@@ -43,10 +43,9 @@ agent runs.
 
 See the [changelog](CHANGELOG.md) for release-specific changes and upgrade notes.
 
-> **0.2.3:** the CLI accepts the exact name of an open tac where it takes a tac,
-> and lists candidates instead of guessing. The server and the MCP adapter still
-> take only the UUID. Update the CLI and restart `tabd` together. See
-> [Upgrading from 0.2.2 to 0.2.3](#upgrading-from-022-to-023).
+> **0.2.4:** `tabc send --id <UUID>` lets a caller reuse a saved message ID
+> when retrying the same request. Normal send checks still apply. See
+> [Upgrading from 0.2.3 to 0.2.4](#upgrading-from-023-to-024).
 
 It is meant to stay small enough to read. Count it rather than trust a number
 printed here — a baked total is stale by the next commit, which is why this
@@ -647,6 +646,38 @@ acting node (from `--node`, or `TABC_NODE`) in the audit. `ls`, `check`, and
 the returned deliveries advance to `INJECTED`, not `READ`. Use `ack` after
 reviewing each message. `search --query <text>` searches names, descriptions,
 subjects, and bodies without changing delivery state.
+
+### Upgrading from 0.2.3 to 0.2.4
+
+0.2.4 adds the CLI `send --id` option. The daemon already handles duplicate
+message IDs; the ledger schema, notifier, and MCP adapter are unchanged.
+Nodes, keys, messages, delivery states, TACs, routes, and Codex queue receipts
+are preserved. No conversion or registration is required.
+
+After 0.2.4 is published, install one of these packages in the environment
+that runs your existing installation:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.4"
+# Or, include the optional MCP adapter:
+python -m pip install --upgrade "tabc[mcp]==0.2.4"
+```
+
+The CLI option works with an existing 0.2.3 daemon. A daemon or notifier
+restart is not required for this feature. If replacing the complete running
+installation, stop the notifier and `tabd`, confirm the ledger WAL is absent
+or empty, and back up the store and keys before installing. Restart `tabd`,
+then one notifier from the same installation. Restart any running MCP adapter
+from its host to load the updated package. Preserve the existing store paths,
+keys, server address, and launch settings.
+
+Check `tabc --version` and `tabc send --help` in the target environment.
+Before the first send, save the ID and complete message inputs. Reuse them
+unchanged for retries. An unread-message refusal still requires reading the
+relevant messages; a conflict requires inspecting the saved and stored
+requests. Do not generate a new ID to force a retry through.
+
+An upgrade from an older version follows its notes below first.
 
 ### Upgrading from 0.2.2 to 0.2.3
 
