@@ -129,7 +129,8 @@
         {"flag": "--subject", "required": true},
         {"flag": "--body"},
         {"flag": "--body-file", "purpose": "read the body from a file; the body does not pass through the shell"},
-        {"flag": "--priority", "default": "next", "choices": ["now", "next", "batch"]}
+        {"flag": "--priority", "default": "next", "choices": ["now", "next", "batch"]},
+        {"flag": "--id", "purpose": "caller-chosen message UUID for a retry-safe send; after the usual send checks (unread mail can refuse it with UNREAD_BLOCKED), the same id with the same envelope is not stored twice and a changed envelope is refused as a conflict"}
       ]
     },
     {
