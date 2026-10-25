@@ -9,7 +9,7 @@
   usual send checks first, so unread mail can refuse it with
   `UNREAD_BLOCKED`. After those checks, the same id with the same
   envelope prints `stored id=<id>` and, below it,
-  `identical envelope resent — not stored twice`, and exits 0. With a
+  `(identical envelope resent — not stored twice)`, and exits 0. With a
   changed envelope it fails with `failed: conflict: …` and exits 1. The id
   is checked before any request and written in canonical form. A value
   that is not a UUID fails with
