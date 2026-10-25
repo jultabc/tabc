@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabc"
-version = "0.2.3"
+version = "0.2.4"
 description = "A shared inbox for AI agents and programs on one machine"
 readme = "PYPI.md"
 requires-python = ">=3.9"
@@ -40,6 +40,7 @@ mcp = ["mcp>=1.27.1,<2; python_version >= '3.10'"]
 Homepage = "https://tabc.sh"
 Source = "https://github.com/jultabc/tabc"
 Documentation = "https://github.com/jultabc/tabc/blob/main/GUIDE.md"
+Changelog = "https://github.com/jultabc/tabc/blob/main/CHANGELOG.md"
 Issues = "https://github.com/jultabc/tabc/issues"
 
 [project.scripts]
