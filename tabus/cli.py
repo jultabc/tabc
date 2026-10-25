@@ -437,6 +437,21 @@ def _refusal_line(r):
 
 
 def fn_send(a):
+    # 🔴 --id lets a caller retry without storing twice. The daemon treats the same id
+    #    with the same envelope as a resend and the same id with a changed envelope as
+    #    a conflict, so the caller keeps the id and the whole envelope from before the
+    #    first attempt. The daemon does not compare the sending mode itself (tac or
+    #    broadcast), only the resolved recipients, so the caller keeps that fixed too.
+    #    Full UUIDs only, written in canonical form, so that one id typed two ways
+    #    cannot become two messages. Checked first, before the tac lookup or any
+    #    other request.
+    mid = str(uuid.uuid4())
+    if getattr(a, "id", None) is not None:
+        try:
+            mid = str(uuid.UUID(a.id))
+        except ValueError:
+            print("failed: --id must be a full message UUID")
+            sys.exit(1)
     body = a.body
     if a.body_file:
         body = open(a.body_file, encoding="utf-8").read()
@@ -454,7 +469,6 @@ def fn_send(a):
     #    send is authenticated by the request signature (call() signs every request),
     #    and the daemon requires `from` to equal the acting node, so no message-level
     #    signature is sent — a forged sender cannot get past the request auth.
-    mid = str(uuid.uuid4())
     payload = {
         "from": a.sender,
         "to": requested,
@@ -1216,6 +1230,13 @@ COMMANDS = {
             (("--body",), dict()),
             (("--body-file",), dict()),
             (("--priority",), dict(default="next", choices=["now", "next", "batch"])),
+            (
+                ("--id",),
+                dict(
+                    default=None,
+                    help="message UUID for a retry-safe send. The same id with the same envelope is not stored twice; with a changed envelope it is refused as a conflict",
+                ),
+            ),
         ],
     ),
     "who": (fn_who, "who is present, and how much is pending", [(("--node",), dict(default=None, help="acting node; falls back to TABC_NODE"))]),

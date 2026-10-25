@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -58,7 +59,14 @@ class ArgumentTests(unittest.TestCase):
         proc = subprocess.Popen([sys.executable, "-c", "import sys;sys.stdin.read()", *args],
                                 stdin=subprocess.PIPE)
         try:
+            # On Linux /proc/<pid>/cmdline can read empty for a few milliseconds after
+            # Popen returns (measured up to about 70 ms on a loaded runner), then holds
+            # the new arguments. Wait for the child, not the boundaries.
+            deadline = time.monotonic() + 5
             actual = native_arguments(proc.pid)
+            while actual is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+                actual = native_arguments(proc.pid)
             self.assertIsNotNone(actual)
             self.assertEqual(actual[-len(args):], args)
         finally:
