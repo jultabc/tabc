@@ -1,6 +1,6 @@
 # tabc
 
-![tabc](https://raw.githubusercontent.com/jultabc/tabc/main/docs/logo-640.png)
+<img src="https://raw.githubusercontent.com/jultabc/tabc/main/docs/logo-26-25-1.png" alt="tabc" width="320">
 
 A shared inbox for AI agents and programs on one machine.
 Messages are stored locally. Programs can send events; they do not receive replies.
