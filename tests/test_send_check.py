@@ -118,6 +118,31 @@ check(
     and d["messages"][0]["subject"] == "secret-to-frank",
 )
 
+# 6b. Two blocking recipients: the list is oldest first across both, before the cap (coco 49793ce4).
+#     hal sends first, ivy second, then hal again; ivy's sits between hal's two.
+for n in ("hal", "ivy"):
+    tabus.bus_register(con, n, "generic")
+tabus.bus_send(con, "hal", ["erin"], "h-old", "x")
+tabus.bus_send(con, "ivy", ["erin"], "i-mid", "x")
+tabus.bus_send(con, "hal", ["erin"], "h-new", "x")
+c, ci, _, _ = compare("dm, two recipients", "erin", ["ivy", "hal"])
+check(
+    "two recipients: oldest first across both",
+    [m["subject"] for m in getattr(ci, "details", {}).get("messages", [])] == ["h-old", "i-mid", "h-new"],
+)
+#     Over the cap: ivy's single old message must stay in the list even though hal has eleven newer ones.
+tabus.bus_register(con, "jo", "generic")
+tabus.bus_send(con, "ivy", ["jo"], "ivy-oldest", "x")
+for i in range(11):
+    tabus.bus_send(con, "hal", ["jo"], f"hal{i}", "x")
+c, ci, _, _ = compare("dm, two recipients over the cap", "jo", ["hal", "ivy"])
+d = getattr(ci, "details", {})
+check(
+    "two recipients over the cap: oldest kept, more counts the rest",
+    d.get("messages", [{}])[0].get("subject") == "ivy-oldest" and len(d["messages"]) == tabus.BLOCKING_LIST_MAX
+    and d.get("more") == 12 - tabus.BLOCKING_LIST_MAX,
+)
+
 # 7. Broadcast is never blocked by unread mail.
 compare("broadcast", "erin", [], broadcast=True)
 
