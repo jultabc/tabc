@@ -76,6 +76,7 @@ MAPPING = {
     "register": "/register",
     "beat": "/beat",
     "send": "/send",
+    "send_check": "/send_check",
     "who": "/who",
     "snooze": "/snooze",
     "pull": "/pull",
@@ -455,6 +456,8 @@ def fn_send(a):
     body = a.body
     if a.body_file:
         body = open(a.body_file, encoding="utf-8").read()
+    if getattr(a, "check", False):
+        return _send_check(a, mid, body)
     group = getattr(a, "tac", None)
     if group:
         group = _designate_tac(group, a.sender)
@@ -499,6 +502,74 @@ def fn_send(a):
         print(f"  {line}")
     for rid, n in (r.get("pending") or {}).items():
         print(f"  {rid}: {n} pending")
+
+
+def _send_check_lines(r):
+    """Lines for a /send_check answer. A pure function."""
+    if r.get("would_send"):
+        return [
+            "not blocked as of " + str(r.get("checked_at", "now"))
+            + " — recipients: " + ", ".join(r.get("recipients") or []),
+            "  checked at that moment only; the send itself can still be refused",
+        ]
+    lines = ["would be refused: " + str(r.get("error"))]
+    if r.get("code"):
+        lines.append(f"  {_refusal_line(r)}")
+    details = r.get("details") if isinstance(r.get("details"), dict) else {}
+    for m in details.get("messages") or []:
+        lines.append(
+            f"  {str(m.get('id', ''))[:ID_PREFIX_LEN]}  from {m.get('from')}  {m.get('subject')}"
+        )
+    if details.get("more"):
+        lines.append(f"  … {details['more']} more")
+    if details.get("messages"):
+        lines.append("  open them with: tabc open --node <you> --id <id>, then send")
+    return lines
+
+
+def _send_check(a, mid, body):
+    """--check: ask the daemon whether this exact send would go through. Sends nothing.
+
+    Exit 0 = not blocked, 1 = would be refused, 2 = the check itself failed.
+    🔴 A failed check is never reported as "not blocked". A daemon without
+       /send_check answers 404 and has stored nothing, because the check never
+       travels on /send, where an older daemon would drop the flag and send.
+    """
+    try:
+        group = getattr(a, "tac", None)
+        if group:
+            group = _designate_tac(group, a.sender)
+        requested = _recipients(a.to)
+        if not requested and not group and not getattr(a, "broadcast", False):
+            print("check failed: a recipient is required — --to <node>, --tac <tac>, or --broadcast")
+            sys.exit(2)
+        payload = {
+            "from": a.sender,
+            "to": requested,
+            "subject": a.subject,
+            "body": body,
+            "priority": a.priority,
+            "message_id": mid,
+        }
+        if group:
+            payload["tac"] = group
+        if getattr(a, "broadcast", False):
+            payload["broadcast"] = True
+        code, r = call("POST", MAPPING["send_check"], payload, node=a.sender)
+    except SystemExit as e:
+        sys.exit(0 if e.code in (0, None) else 2)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"check failed: {type(e).__name__}: {e}")
+        sys.exit(2)
+    if code == 404 and r.get("error") == "not found":
+        print("check failed: this tabd has no /send_check (older than 0.2.4.1); nothing was sent")
+        sys.exit(2)
+    if code != 200 or "would_send" not in r:
+        print(f"check failed: HTTP {code}: {r.get('error') or r}")
+        sys.exit(2)
+    for line in _send_check_lines(r):
+        print(line)
+    sys.exit(0 if r["would_send"] else 1)
 
 
 def fn_who(_a):
@@ -1235,6 +1306,13 @@ COMMANDS = {
                 dict(
                     default=None,
                     help="message UUID for a retry-safe send. The same id with the same envelope is not stored twice; with a changed envelope it is refused as a conflict",
+                ),
+            ),
+            (
+                ("--check",),
+                dict(
+                    action="store_true",
+                    help="send nothing; ask whether this send would be refused now, and by which unread messages. Exit 0 not blocked, 1 refused, 2 check failed",
                 ),
             ),
         ],

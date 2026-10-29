@@ -605,7 +605,7 @@ class BusHandler(BaseHTTPRequestHandler):
         if path in ("/register", "/beat", "/snooze", "/reopen", "/ack"):
             if data.get("node", "") != self._acting():
                 return self._json(403, {"error": "a node may act only on its own node"})
-        elif path == "/send":
+        elif path in ("/send", "/send_check"):
             if data.get("from", "") != self._acting():
                 return self._json(403, {"error": "a node may send only as itself"})
         if (
@@ -759,6 +759,37 @@ class BusHandler(BaseHTTPRequestHandler):
             }
             con.close()
             return self._json(200, {"id": mid, "info": info, "pending": pending})
+
+        elif path == "/send_check":
+            # 🔴 A separate path, not a flag on /send: a daemon that predates it answers
+            #    404 and sends nothing, where an unknown field on /send would be dropped
+            #    and the message really sent.
+            #    The same bus_send runs with check_only and returns before any write.
+            mid, info = tabus.bus_send(
+                con,
+                data.get("from", ""),
+                data.get("to", []),
+                data.get("subject", ""),
+                data.get("body"),
+                data.get("priority", "next"),
+                data.get("expires_at"),
+                data.get("reply_to"),
+                data.get("message_id"),
+                data.get("thread_id"),
+                data.get("tac"),
+                bool(data.get("broadcast")),
+                check_only=True,
+            )
+            con.close()
+            if mid is None:
+                refused = {"error": info, "would_send": False}
+                if hasattr(info, "fields"):
+                    refused.update(info.fields())
+                return self._json(200, refused)
+            return self._json(
+                200,
+                {"would_send": True, "recipients": info["recipients"], "checked_at": tabus.now_iso()},
+            )
 
         elif path == "/reopen":
             # 🔴 Accept an id prefix. Mailbox listings show a truncated id, and opening

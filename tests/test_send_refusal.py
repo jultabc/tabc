@@ -304,12 +304,18 @@ class BusSend(unittest.TestCase):
         self.assertIsNone(mid)
         self.assertTrue(info.startswith("read their messages first: bob (1)."))
         self.assertEqual((info.code, info.retry), ("UNREAD_BLOCKED", "after_condition"))
-        self.assertEqual(info.details, {"scope": "dm", "recipients": [{"node": "bob", "unread": 1}]})
+        # 0.2.4.1 adds messages and more; the older fields keep their values.
+        older = {k: info.details[k] for k in ("scope", "recipients")}
+        self.assertEqual(older, {"scope": "dm", "recipients": [{"node": "bob", "unread": 1}]})
+        self.assertEqual([(m["from"], m["subject"]) for m in info.details["messages"]], [("bob", "q")])
+        self.assertEqual(info.details["more"], 0)
         tabus.bus_send(self.con, "carol", [], "t1", "one", tac_id=self.tac)
         tabus.bus_send(self.con, "carol", [], "t2", "two", tac_id=self.tac)
         mid, info = tabus.bus_send(self.con, "alice", [], "r", "reply", tac_id=self.tac)
         self.assertTrue(info.startswith(f"tac '{self.tac}': 2 unread. Read them first"))
-        self.assertEqual(info.details, {"scope": "tac", "tac": self.tac, "unread": 2})
+        older = {k: info.details[k] for k in ("scope", "tac", "unread")}
+        self.assertEqual(older, {"scope": "tac", "tac": self.tac, "unread": 2})
+        self.assertEqual([m["subject"] for m in info.details["messages"]], ["t1", "t2"])
 
 
 class QuietServer(tabd.ThreadingHTTPServer):
