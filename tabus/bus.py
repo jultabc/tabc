@@ -2130,21 +2130,23 @@ def bus_send(
     # still contain mail accepted before a node switched to --program; that stale
     # unread state must not stop its one-way event stream.
     if not tac_id and not broadcast and not sender_is_program:
+        dm_scope = "m.tac_id IS NULL AND m.broadcast = 0 AND m.sender_id "
         blocked = []
         counts = []
-        blocking = []
         for r in valid:
-            n, msgs = _send_blockers(
-                con,
-                sender_id,
-                "m.sender_id = ? AND m.tac_id IS NULL AND m.broadcast = 0",
-                (r,),
-            )
+            n, _ = _send_blockers(con, sender_id, dm_scope + "= ?", (r,))
             if n:
                 blocked.append(f"{r} ({n})")
                 counts.append((r, n))
-                blocking.extend(msgs)
         if blocked:
+            # 🔴 One query over every blocking recipient, so the list is oldest first
+            #    across all of them before the cap, not per recipient in turn.
+            _, blocking = _send_blockers(
+                con,
+                sender_id,
+                dm_scope + "IN (" + ",".join("?" * len(counts)) + ")",
+                tuple(r for r, _ in counts),
+            )
             return (
                 None,
                 unread_blocked_dm(
