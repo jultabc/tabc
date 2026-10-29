@@ -2,10 +2,10 @@
 """tabc send --check over HTTP: exit codes, and nothing is sent when the daemon cannot check.
 
 Contract:
-- Against this daemon: exit 0 when not blocked, 1 when the send would be refused, with the
+- Against this daemon: exit 0 when not blocked, 3 when the send would be refused, with the
   blocking messages listed. The check stores no message.
 - A daemon without /send_check (404 not found): exit 2, nothing sent, and the CLI never calls /send.
-- Nothing listening: exit 2, reported as a failed check, never as "not blocked".
+- Nothing listening: exit 1, reported as a failed check, never as "not blocked".
 - With TABC_OLD_ROOT set to the source tree of an older release, the same check against
   that real older daemon: exit 2 and no message stored; and the older CLI against this
   daemon sends and reads a refusal as before.
@@ -114,8 +114,8 @@ try:
     before = messages(dbpath)
     r = cli(base, *CHECK)
     check(
-        "new: blocked exits 1 and lists the message",
-        r.returncode == 1 and "UNREAD_BLOCKED" in r.stdout and "from-gus" in r.stdout,
+        "new: blocked exits 3 and lists the message",
+        r.returncode == 3 and "UNREAD_BLOCKED" in r.stdout and "from-gus" in r.stdout,
         r.stdout + r.stderr,
     )
     check("new: the blocked check stored nothing", messages(dbpath) == before)
@@ -156,7 +156,7 @@ check("404 daemon: /send was never called", "/send" not in seen and "/send_check
 # 3. Nothing listening.
 dead = f"http://127.0.0.1:{server_harness.free_port()}"
 r = cli(dead, *CHECK)
-check("no daemon: exits 2 as a failed check", r.returncode == 2 and "check failed" in r.stdout and "not blocked" not in r.stdout,
+check("no daemon: exits 1 as a failed check", r.returncode == 1 and "check failed" in r.stdout and "not blocked" not in r.stdout,
       r.stdout + r.stderr)
 
 # 4. A real older daemon, when its source tree is given.

@@ -530,7 +530,11 @@ def _send_check_lines(r):
 def _send_check(a, mid, body):
     """--check: ask the daemon whether this exact send would go through. Sends nothing.
 
-    Exit 0 = not blocked, 1 = would be refused, 2 = the check itself failed.
+    Exit codes (the iotzu programming guide 3.4 meanings; 3 is this command's own):
+      0  not blocked at the moment of the check
+      1  the check failed while running (connection, server error, tac lookup); retry may work
+      2  refused to start: this daemon has no /send_check, or no such tac; retrying gives the same
+      3  the send would be refused (UNREAD_BLOCKED or another refusal)
     🔴 A failed check is never reported as "not blocked". A daemon without
        /send_check answers 404 and has stored nothing, because the check never
        travels on /send, where an older daemon would drop the flag and send.
@@ -556,20 +560,20 @@ def _send_check(a, mid, body):
         if getattr(a, "broadcast", False):
             payload["broadcast"] = True
         code, r = call("POST", MAPPING["send_check"], payload, node=a.sender)
-    except SystemExit as e:
-        sys.exit(0 if e.code in (0, None) else 2)
     except (urllib.error.URLError, OSError, ValueError) as e:
+        # _designate_tac exits by itself: 2 for no such tac, 1 for a failed lookup,
+        # which are already the meanings above.
         print(f"check failed: {type(e).__name__}: {e}")
-        sys.exit(2)
+        sys.exit(1)
     if code == 404 and r.get("error") == "not found":
         print("check failed: this tabd has no /send_check (older than 0.2.4.1); nothing was sent")
         sys.exit(2)
     if code != 200 or "would_send" not in r:
         print(f"check failed: HTTP {code}: {r.get('error') or r}")
-        sys.exit(2)
+        sys.exit(1)
     for line in _send_check_lines(r):
         print(line)
-    sys.exit(0 if r["would_send"] else 1)
+    sys.exit(0 if r["would_send"] else 3)
 
 
 def fn_who(_a):
@@ -1312,7 +1316,7 @@ COMMANDS = {
                 ("--check",),
                 dict(
                     action="store_true",
-                    help="send nothing; ask whether this send would be refused now, and by which unread messages. Exit 0 not blocked, 1 refused, 2 check failed",
+                    help="send nothing; ask whether this send would be refused now, and by which unread messages. Exit 0 not blocked, 1 check failed, 2 daemon cannot check, 3 would be refused",
                 ),
             ),
         ],
