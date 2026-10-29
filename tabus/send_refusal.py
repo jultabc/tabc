@@ -227,27 +227,31 @@ def request_length_refusal(content_length):
     return None
 
 
-def _with_blocking(details, unread, blocking, limit):
+# Messages listed in an UNREAD_BLOCKED refusal; `more` carries the rest of the count.
+BLOCKING_LIST_MAX = 10
+
+
+def _with_blocking(details, unread, blocking):
     # 🔴 Fields are only added: older clients keep reading scope, tac and unread.
     if blocking is not None:
-        shown = blocking[:limit]
+        shown = blocking[:BLOCKING_LIST_MAX]
         details["messages"] = shown
         details["more"] = max(0, unread - len(shown))
     return details
 
 
-def unread_blocked_tac(sentence, tac_id, unread, blocking=None, limit=10):
+def unread_blocked_tac(sentence, tac_id, unread, blocking=None):
     """blocking: oldest first [{id, from, subject, accepted_at}] of those unread."""
     return SendRefusal(
         sentence,
         "UNREAD_BLOCKED",
         "open the unread messages in this tac, then send",
-        _with_blocking({"scope": "tac", "tac": tac_id, "unread": unread}, unread, blocking, limit),
+        _with_blocking({"scope": "tac", "tac": tac_id, "unread": unread}, unread, blocking),
         "after_condition",
     )
 
 
-def unread_blocked_dm(sentence, counts, blocking=None, limit=10):
+def unread_blocked_dm(sentence, counts, blocking=None):
     """counts: [(recipient, unread messages from that recipient to the sender)]."""
     return SendRefusal(
         sentence,
@@ -257,7 +261,6 @@ def unread_blocked_dm(sentence, counts, blocking=None, limit=10):
             {"scope": "dm", "recipients": [{"node": r, "unread": n} for r, n in counts]},
             sum(n for _, n in counts),
             blocking,
-            limit,
         ),
         "after_condition",
     )
