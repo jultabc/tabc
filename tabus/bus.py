@@ -74,7 +74,7 @@ DB_PATH = os.environ.get(
 #    drifted once already — 0.1.0.post1 shipped while this said 0.1.0. Bump
 #    both together; tests/test_version_agreement.py fails the build otherwise.
 #    Do not copy the number into documentation.
-__version__ = "0.2.4"
+__version__ = "0.2.4.1"  # internal test build, not a release (user 2026-10-30)
 PROTOCOL_VERSION = "tabus.v1"
 
 # TTLs. Past these, a derived status counts as old.
@@ -1920,6 +1920,45 @@ def bus_rotate_key(con, node_id, new_pubkey, by="operator"):
     return True, f"rotated {node_id}: pubkey {short_old}… → {new_pubkey[:12]}… by {by or 'operator'}"
 
 
+SEND_CHECK_PASSED = "send-check-passed"
+# Messages listed in an UNREAD_BLOCKED refusal; `more` carries the rest of the count.
+BLOCKING_LIST_MAX = 10
+
+
+def _send_blockers(con, sender_id, scope_sql, scope_params):
+    """Unread deliveries to the sender that block a send: (count, oldest first list).
+
+    Unread here means ACCEPTED or CLAIMED, the states the send gate has always used:
+    a pulled but unopened delivery is CLAIMED and still blocks until it is opened.
+    Only deliveries addressed to the sender are read, so the list never shows
+    another node's mail. This query changes no state.
+    """
+    where = (
+        "d.recipient_id = ? AND d.state IN ('ACCEPTED','CLAIMED') AND " + scope_sql
+    )
+    params = (sender_id, *scope_params)
+    n = con.execute(
+        "SELECT COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
+        f"WHERE {where}",
+        params,
+    ).fetchone()["c"]
+    rows = con.execute(
+        "SELECT m.id, m.sender_id, m.subject, m.accepted_at "
+        "FROM deliveries d JOIN messages m ON m.id = d.message_id "
+        f"WHERE {where} ORDER BY m.accepted_at, m.rowid LIMIT ?",
+        (*params, BLOCKING_LIST_MAX),
+    ).fetchall()
+    return n, [
+        {
+            "id": r["id"],
+            "from": r["sender_id"],
+            "subject": r["subject"],
+            "accepted_at": r["accepted_at"],
+        }
+        for r in rows
+    ]
+
+
 def bus_send(
     con,
     sender_id,
@@ -1933,7 +1972,10 @@ def bus_send(
     thread_id=None,
     tac_id=None,
     broadcast=False,
+    check_only=False,
 ):
+    # 🔴 check_only runs every refusal below and stops before the first write, so a
+    #    preview and a real send reach the same verdict through the same code.
     # 🔴 Payload checks come before any state lookup, so a malformed request learns
     #    nothing about senders, tacs or unread mail.
     refusal = check_send_payload(
@@ -2016,11 +2058,7 @@ def bus_send(
         #    a topic into a flood.
         #    Unread means ACCEPTED or CLAIMED. Catch-up advances only returned
         #    deliveries to INJECTED; unreturned deliveries can keep the block.
-        _unread = con.execute(
-            "SELECT COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
-            "WHERE d.recipient_id = ? AND m.tac_id = ? AND d.state IN ('ACCEPTED','CLAIMED')",
-            (sender_id, tac_id),
-        ).fetchone()["c"]
+        _unread, _blocking = _send_blockers(con, sender_id, "m.tac_id = ?", (tac_id,))
         if _unread:
             return (
                 None,
@@ -2032,6 +2070,7 @@ def bus_send(
                     #    the details name the same tac as the sentence above them.
                     _given,
                     _unread,
+                    _blocking,
                 ),
             )
         recipients = [m for m in bus_tac_members(con, tac_id) if m != sender_id]
@@ -2093,17 +2132,18 @@ def bus_send(
     if not tac_id and not broadcast and not sender_is_program:
         blocked = []
         counts = []
+        blocking = []
         for r in valid:
-            n = con.execute(
-                "SELECT COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
-                "WHERE d.recipient_id = ? AND m.sender_id = ? "
-                "AND m.tac_id IS NULL AND m.broadcast = 0 "
-                "AND d.state IN ('ACCEPTED','CLAIMED')",
-                (sender_id, r),
-            ).fetchone()["c"]
+            n, msgs = _send_blockers(
+                con,
+                sender_id,
+                "m.sender_id = ? AND m.tac_id IS NULL AND m.broadcast = 0",
+                (r,),
+            )
             if n:
                 blocked.append(f"{r} ({n})")
                 counts.append((r, n))
+                blocking.extend(msgs)
         if blocked:
             return (
                 None,
@@ -2111,8 +2151,12 @@ def bus_send(
                     f"read their messages first: {', '.join(blocked)}. "
                     f"Open them with tabc open, then send. Listen before speaking.",
                     counts,
+                    blocking,
                 ),
             )
+
+    if check_only:
+        return SEND_CHECK_PASSED, {"recipients": valid}
 
     mid = message_id or str(uuid.uuid4())
     ts = now_iso()
