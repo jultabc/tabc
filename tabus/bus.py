@@ -50,6 +50,7 @@ from .send_refusal import (  # the limits stay importable as tabus.MAX_*_BYTES
     MAX_BODY_BYTES,
     MAX_SUBJECT_BYTES,
     check_send_payload,
+    BLOCKING_LIST_MAX,
     unread_blocked_dm,
     unread_blocked_tac,
 )
@@ -1921,8 +1922,6 @@ def bus_rotate_key(con, node_id, new_pubkey, by="operator"):
 
 
 SEND_CHECK_PASSED = "send-check-passed"
-# Messages listed in an UNREAD_BLOCKED refusal; `more` carries the rest of the count.
-BLOCKING_LIST_MAX = 10
 
 
 def _send_blockers(con, sender_id, scope_sql, scope_params):
