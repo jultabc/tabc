@@ -227,22 +227,37 @@ def request_length_refusal(content_length):
     return None
 
 
-def unread_blocked_tac(sentence, tac_id, unread):
+def _with_blocking(details, unread, blocking, limit):
+    # 🔴 Fields are only added: older clients keep reading scope, tac and unread.
+    if blocking is not None:
+        shown = blocking[:limit]
+        details["messages"] = shown
+        details["more"] = max(0, unread - len(shown))
+    return details
+
+
+def unread_blocked_tac(sentence, tac_id, unread, blocking=None, limit=10):
+    """blocking: oldest first [{id, from, subject, accepted_at}] of those unread."""
     return SendRefusal(
         sentence,
         "UNREAD_BLOCKED",
         "open the unread messages in this tac, then send",
-        {"scope": "tac", "tac": tac_id, "unread": unread},
+        _with_blocking({"scope": "tac", "tac": tac_id, "unread": unread}, unread, blocking, limit),
         "after_condition",
     )
 
 
-def unread_blocked_dm(sentence, counts):
+def unread_blocked_dm(sentence, counts, blocking=None, limit=10):
     """counts: [(recipient, unread messages from that recipient to the sender)]."""
     return SendRefusal(
         sentence,
         "UNREAD_BLOCKED",
         "open the unread messages from these recipients, then send",
-        {"scope": "dm", "recipients": [{"node": r, "unread": n} for r, n in counts]},
+        _with_blocking(
+            {"scope": "dm", "recipients": [{"node": r, "unread": n} for r, n in counts]},
+            sum(n for _, n in counts),
+            blocking,
+            limit,
+        ),
         "after_condition",
     )
