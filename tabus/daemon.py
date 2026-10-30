@@ -15,11 +15,19 @@ executes this file.
 Auth: every request is signed by the acting node's key (X-Node / X-Node-Ts /
 X-Node-Sig) and verified against that node's registered public key. There is no
 shared secret — see _authorized.
+
+Exit codes. The server runs until stopped; it has no
+stop file and no signal handler, so SIGTERM and SIGINT end it with the signal
+(rc -15, -2 as a subprocess sees it).
+  1   any other failure, including a failed bind other than the port being taken
+  2   refused to start: the address and port are already in use; starting again gives the same
 """
 
+import errno
 import json
 import os
 import socket
+import sys
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -980,6 +988,9 @@ def init_extras() -> None:
     con.close()
 
 
+EXIT_PORT_IN_USE = 2
+
+
 def main():
     """Console entry point; see the note in tabus.cli.main."""
     import argparse
@@ -1000,14 +1011,27 @@ def main():
         help="LAN address, to accept remote clients. Every request is signed regardless.",
     )
     a = ap.parse_args()
-    init_extras()
     # 🔴 The socket is taken here, and the line below is printed after that. Printed
     #    before, it announced an intention: a bind that then failed left a log saying the
     #    daemon was listening when it never did, and anything reading that line as a
     #    readiness signal would be reading it from a process that does not hold the port.
     #    The port comes from the socket rather than from the argument, so it is the port
     #    actually bound.
-    server = ThreadingHTTPServer((a.bind, a.port), BusHandler)
+    try:
+        server = ThreadingHTTPServer((a.bind, a.port), BusHandler)
+    except OSError as e:
+        if e.errno != errno.EADDRINUSE:
+            raise
+        print(f"[tabd] {a.bind}:{a.port} is already in use — not started", flush=True)
+        sys.exit(EXIT_PORT_IN_USE)
+    # 🔴 The ledger is prepared only once the port is held: a second tabd refused for
+    #    a taken port must leave the store as it was. If preparing it
+    #    fails, the socket is closed before the error goes out.
+    try:
+        init_extras()
+    except BaseException:
+        server.server_close()
+        raise
     print(READY_LINE.format(bind=a.bind, port=server.server_address[1]), flush=True)
     server.serve_forever()
 

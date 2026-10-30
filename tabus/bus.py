@@ -75,7 +75,7 @@ DB_PATH = os.environ.get(
 #    drifted once already — 0.1.0.post1 shipped while this said 0.1.0. Bump
 #    both together; tests/test_version_agreement.py fails the build otherwise.
 #    Do not copy the number into documentation.
-__version__ = "0.2.4.2"  # internal test build, not a release (user 2026-10-30)
+__version__ = "0.2.4.3"  # internal test build, not a release (user 2026-10-30)
 PROTOCOL_VERSION = "tabus.v1"
 
 # TTLs. Past these, a derived status counts as old.
