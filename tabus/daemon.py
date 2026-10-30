@@ -388,6 +388,22 @@ class BusHandler(BaseHTTPRequestHandler):
                 con.close()
             return self._json(200, {"messages": messages})
 
+        if path == "/status":
+            # 🔴 Read only: no stamp_mailbox_open, no state change. /mailbox records a
+            #    mailbox open, and a status check is not one.
+            if not self._authorized():
+                return self._json(401, {"error": "token"})
+            node = q.get("node")
+            if not node:
+                return self._json(400, {"error": "node is required"})
+            if node != self._acting():
+                return self._json(403, {"error": "a node may read only its own mailbox"})
+            con = self._connect()
+            st = tabus.bus_inbox_status(con, node)
+            con.close()
+            st["checked_at"] = tabus.now_iso()
+            return self._json(200, st)
+
         if path == "/mailbox":
             if not self._authorized():
                 return self._json(401, {"error": "token"})
