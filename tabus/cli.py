@@ -19,6 +19,13 @@ Arrival and reading are different layers:
 The register command registers a node without changing the terminal title.
 Process identity comes only from an explicit --node or
 --sender, or from TABC_NODE; no shared on-disk default is trusted.
+
+Exit codes (iotzu programming guide 3.4; each command follows this table):
+  0   done
+  1   the request failed or was refused (connection, server error, a refused send or ack)
+  2   refused to start: missing or invalid input or node identity, a usage error (argparse),
+      a daemon older than the command needs, or HTTP 400 / 401 / 403; repeating gives the same
+  3   send --check: the send would be refused
 """
 
 import json
