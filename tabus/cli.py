@@ -603,13 +603,22 @@ def _status_lines(r):
             )
     blk = r.get("blocking") or {}
     targets = [f"dm to {d['node']} ({d['unread']})" for d in blk.get("dm") or []]
-    targets += [f"tac {t.get('name') or t['tac']} ({t['unread']})" for t in blk.get("tac") or []]
+    open_tacs = [t for t in blk.get("tac") or [] if not t.get("closed")]
+    closed_tacs = [t for t in blk.get("tac") or [] if t.get("closed")]
+    targets += [f"tac {t.get('name') or t['tac']} ({t['unread']})" for t in open_tacs]
     if targets:
         lines.append("  a send is refused until these are opened: " + " · ".join(targets))
     else:
         lines.append("  no send is blocked by unread mail")
+    if closed_tacs:
+        lines.append(
+            "  unread in closed tacs (a closed tac refuses sends anyway): "
+            + " · ".join(f"{t.get('name') or t['tac']} ({t['unread']})" for t in closed_tacs)
+        )
     if bk.get("broadcast"):
         lines.append("  broadcasts never block a send")
+    if r.get("program"):
+        lines.append("  program node: DMs never block its sends")
     if old.get("unopened"):
         lines.append("  open with: tabc open --node <you> --id <id>")
     lines.append("  as of that moment only; mail can arrive or be opened right after")

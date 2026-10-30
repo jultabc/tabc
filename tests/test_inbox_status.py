@@ -143,5 +143,84 @@ st = status()
 check("after opening alpha: not listed", all(t["tac"] != ta for t in st["blocking"]["tac"]))
 check("after opening alpha: gate passes", gate(tac_id=ta) is None)
 
+# 9. One snapshot: another connection marks the only unopened DM READ
+#    right after the first query. Every part of the answer must still see it.
+for n in ("pat", "sam"):
+    tabus.bus_register(con, n, "generic")
+race = deliver("sam", ["pat"], "race")
+
+
+class Interleave:
+    """Forwards to the real connection; after the first query, a second connection writes."""
+
+    def __init__(self, real):
+        self.real, self.fired = real, False
+
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+
+    def execute(self, sql, *args):
+        cur = self.real.execute(sql, *args)
+        if not self.fired and "GROUP BY d.state" in sql:
+            self.fired = True
+            rows = cur.fetchall()
+            other = tabus.connect()
+            other.execute("UPDATE deliveries SET state='READ' WHERE message_id=? AND recipient_id='pat'", (race,))
+            other.commit()
+            other.close()
+            return iter(rows)
+        return cur
+
+
+px = Interleave(con)
+st = tabus.bus_inbox_status(px, "pat")
+check("race: the write happened between queries", px.fired
+      and con.execute("SELECT state FROM deliveries WHERE message_id=? AND recipient_id='pat'", (race,)).fetchone()[0] == "READ")
+unopened = st["by_state"]["ACCEPTED"] + st["by_state"]["CLAIMED"]
+check(
+    "race: counts, oldest and blocking come from one moment",
+    unopened == 1 and st["oldest"]["unopened"] is not None and st["blocking"]["dm"] == [{"node": "sam", "unread": 1}],
+    str(st),
+)
+check("race: the snapshot is closed afterwards", not con.in_transaction)
+
+# 10. Program node: DMs never block its sends; its tac still does.
+tabus.bus_register(con, "bot", "generic")
+tp = tac("ptac", ["bot", "gus"])
+deliver("gus", ["bot"], "dm-to-bot")
+deliver("gus", [], "tac-to-bot", tac_id=tp)
+con.execute("UPDATE nodes SET is_program=1 WHERE node_id='bot'")
+con.commit()
+st = status("bot")
+check("program: no dm blocking, flagged", st["program"] is True and st["blocking"]["dm"] == [])
+check("program: tac blocking kept", [t["tac"] for t in st["blocking"]["tac"]] == [tp])
+mid, _ = tabus.bus_send(con, "bot", ["gus"], "s", "b", check_only=True)
+check("program: the gate agrees, dm to gus passes", mid == tabus.SEND_CHECK_PASSED)
+mid, info = tabus.bus_send(con, "bot", [], "s", "b", tac_id=tp, check_only=True)
+check("program: the gate agrees, ptac refuses", mid is None and getattr(info, "code", None) == "UNREAD_BLOCKED")
+
+# 11. Closed tac: listed as closed.
+tc = tac("gone", ["erin", "gus"])
+deliver("gus", [], "in-gone", tac_id=tc)
+tabus.bus_tac_close(con, tc, "done", "gus")
+st = status()
+g = [t for t in st["blocking"]["tac"] if t["tac"] == tc]
+check("closed tac flagged", g and g[0]["closed"] is True, str(g))
+
+# 12. Screen lines: a closed tac is not in the "refused until opened" line; a program node says so.
+from tabus.cli import _status_lines  # noqa: E402
+
+lines = "\n".join(_status_lines({
+    "node": "x", "checked_at": "t", "unread": 2, "program": True,
+    "by_state": {"ACCEPTED": 2, "CLAIMED": 0, "INJECTED": 0}, "by_kind": {"dm": 0, "tac": 2, "broadcast": 0},
+    "oldest": {"unopened": None, "opened_not_read": None},
+    "blocking": {"dm": [], "tac": [{"tac": "a", "name": "live", "unread": 1, "closed": False},
+                                   {"tac": "b", "name": "gone", "unread": 1, "closed": True}]},
+}))
+refused = [l for l in lines.splitlines() if "refused until" in l]
+check("screen: closed tac kept out of the refused line", refused and "live" in refused[0] and "gone" not in refused[0], lines)
+check("screen: closed tac shown apart", "unread in closed tacs" in lines and "gone (1)" in lines, lines)
+check("screen: program node line", "program node: DMs never block its sends" in lines, lines)
+
 print(f"\n=== Results: FAIL {len(fails)} ===")
 sys.exit(1 if fails else 0)
