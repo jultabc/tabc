@@ -1931,6 +1931,13 @@ BLOCKING_STATES_SQL = "d.state IN ('ACCEPTED','CLAIMED')"
 DM_SCOPE_SQL = "m.tac_id IS NULL AND m.broadcast = 0"
 
 
+def _is_program(con, node):
+    """A program node's sends skip the DM gate. One test, used by the gate and the status."""
+    return bool(
+        con.execute("SELECT 1 FROM nodes WHERE node_id=? AND is_program=1", (node,)).fetchone()
+    )
+
+
 def _send_blockers(con, sender_id, scope_sql, scope_params):
     """Unread deliveries to the sender that block a send: (count, oldest first list).
 
@@ -1974,74 +1981,89 @@ def bus_inbox_status(con, node):
     the send gate counts it: DMs per sending node, tac messages per tac. Broadcasts
     never block a send, so they are counted apart.
     """
-    ph = ",".join("?" * len(UNREAD_STATES))
-    base = (
-        "FROM deliveries d JOIN messages m ON m.id = d.message_id "
-        f"WHERE d.recipient_id = ? AND d.state IN ({ph})"
-    )
-    params = (node, *UNREAD_STATES)
-    by_state = {s: 0 for s in UNREAD_STATES}
-    for r in con.execute(f"SELECT d.state, COUNT(*) c {base} GROUP BY d.state", params):
-        by_state[r["state"]] = r["c"]
-    kind = (
-        "CASE WHEN m.tac_id IS NOT NULL THEN 'tac' "
-        "WHEN m.broadcast = 1 THEN 'broadcast' ELSE 'dm' END"
-    )
-    by_kind = {"dm": 0, "tac": 0, "broadcast": 0}
-    for r in con.execute(f"SELECT {kind} k, COUNT(*) c {base} GROUP BY k", params):
-        by_kind[r["k"]] = r["c"]
-    def oldest(state_sql):
-        o = con.execute(
-            "SELECT m.id, m.sender_id, m.subject, m.accepted_at, m.tac_id, d.state, t.name AS tac_name "
+    # 🔴 Every query below reads one snapshot. Without a read transaction each SELECT
+    #    sees its own moment, and a message marked READ between two of them would be
+    #    counted but missing from the oldest and the blocking list (coco 8709e174).
+    #    WAL lets writers go on meanwhile. A caller already in a transaction keeps it.
+    own = not con.in_transaction
+    if own:
+        con.execute("BEGIN")
+    try:
+        ph = ",".join("?" * len(UNREAD_STATES))
+        base = (
             "FROM deliveries d JOIN messages m ON m.id = d.message_id "
-            "LEFT JOIN tacs t ON t.tac_id = m.tac_id "
-            f"WHERE d.recipient_id = ? AND {state_sql} "
-            "ORDER BY m.accepted_at, m.rowid LIMIT 1",
-            (node,),
-        ).fetchone()
-        if o is None:
-            return None
-        return {
-            "id": o["id"],
-            "from": o["sender_id"],
-            "subject": o["subject"],
-            "accepted_at": o["accepted_at"],
-            "state": o["state"],
-            "tac": o["tac_id"],
-            "tac_name": o["tac_name"],
-        }
+            f"WHERE d.recipient_id = ? AND d.state IN ({ph})"
+        )
+        params = (node, *UNREAD_STATES)
+        by_state = {s: 0 for s in UNREAD_STATES}
+        for r in con.execute(f"SELECT d.state, COUNT(*) c {base} GROUP BY d.state", params):
+            by_state[r["state"]] = r["c"]
+        kind = (
+            "CASE WHEN m.tac_id IS NOT NULL THEN 'tac' "
+            "WHEN m.broadcast = 1 THEN 'broadcast' ELSE 'dm' END"
+        )
+        by_kind = {"dm": 0, "tac": 0, "broadcast": 0}
+        for r in con.execute(f"SELECT {kind} k, COUNT(*) c {base} GROUP BY k", params):
+            by_kind[r["k"]] = r["c"]
+        def oldest(state_sql):
+            o = con.execute(
+                "SELECT m.id, m.sender_id, m.subject, m.accepted_at, m.tac_id, d.state, t.name AS tac_name "
+                "FROM deliveries d JOIN messages m ON m.id = d.message_id "
+                "LEFT JOIN tacs t ON t.tac_id = m.tac_id "
+                f"WHERE d.recipient_id = ? AND {state_sql} "
+                "ORDER BY m.accepted_at, m.rowid LIMIT 1",
+                (node,),
+            ).fetchone()
+            if o is None:
+                return None
+            return {
+                "id": o["id"],
+                "from": o["sender_id"],
+                "subject": o["subject"],
+                "accepted_at": o["accepted_at"],
+                "state": o["state"],
+                "tac": o["tac_id"],
+                "tac_name": o["tac_name"],
+            }
 
-    blocked = f"d.recipient_id = ? AND {BLOCKING_STATES_SQL}"
-    dm = [
-        {"node": r["sender_id"], "unread": r["c"]}
-        for r in con.execute(
-            "SELECT m.sender_id, COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
-            f"WHERE {blocked} AND {DM_SCOPE_SQL} GROUP BY m.sender_id ORDER BY m.sender_id",
-            (node,),
-        )
-    ]
-    tac = [
-        {"tac": r["tac_id"], "name": r["name"], "unread": r["c"]}
-        for r in con.execute(
-            "SELECT m.tac_id, t.name, COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
-            "LEFT JOIN tacs t ON t.tac_id = m.tac_id "
-            f"WHERE {blocked} AND m.tac_id IS NOT NULL GROUP BY m.tac_id ORDER BY m.tac_id",
-            (node,),
-        )
-    ]
-    return {
-        "node": node,
-        "unread": sum(by_state.values()),
-        "by_state": by_state,
-        "by_kind": by_kind,
-        # 🔴 One oldest per group, not one across all three states: an old opened
-        #    (INJECTED) message would otherwise hide the unopened one that blocks (jack 59d76f98).
-        "oldest": {
-            "unopened": oldest(BLOCKING_STATES_SQL),
-            "opened_not_read": oldest("d.state = 'INJECTED'"),
-        },
-        "blocking": {"dm": dm, "tac": tac},
-    }
+        blocked = f"d.recipient_id = ? AND {BLOCKING_STATES_SQL}"
+        # A program node's sends skip the DM gate (bus_send), so for it no DM blocks.
+        program = _is_program(con, node)
+        dm = [] if program else [
+            {"node": r["sender_id"], "unread": r["c"]}
+            for r in con.execute(
+                "SELECT m.sender_id, COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
+                f"WHERE {blocked} AND {DM_SCOPE_SQL} GROUP BY m.sender_id ORDER BY m.sender_id",
+                (node,),
+            )
+        ]
+        tac = [
+            # A closed tac refuses every send before the unread gate (jack 9d72d474 N2).
+            {"tac": r["tac_id"], "name": r["name"], "unread": r["c"], "closed": bool(r["closed_at"])}
+            for r in con.execute(
+                "SELECT m.tac_id, t.name, t.closed_at, COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
+                "LEFT JOIN tacs t ON t.tac_id = m.tac_id "
+                f"WHERE {blocked} AND m.tac_id IS NOT NULL GROUP BY m.tac_id ORDER BY m.tac_id",
+                (node,),
+            )
+        ]
+        return {
+            "node": node,
+            "program": program,
+            "unread": sum(by_state.values()),
+            "by_state": by_state,
+            "by_kind": by_kind,
+            # 🔴 One oldest per group, not one across all three states: an old opened
+            #    (INJECTED) message would otherwise hide the unopened one that blocks (jack 59d76f98).
+            "oldest": {
+                "unopened": oldest(BLOCKING_STATES_SQL),
+                "opened_not_read": oldest("d.state = 'INJECTED'"),
+            },
+            "blocking": {"dm": dm, "tac": tac},
+        }
+    finally:
+        if own:
+            con.rollback()  # read only: ends the snapshot, writes nothing
 
 
 def bus_send(
@@ -2094,11 +2116,7 @@ def bus_send(
             None,
             f"a removed node cannot send: {sender_id} (restore it first)",
         )
-    sender_is_program = bool(
-        con.execute(
-            "SELECT 1 FROM nodes WHERE node_id=? AND is_program=1", (sender_id,)
-        ).fetchone()
-    )
+    sender_is_program = _is_program(con, sender_id)
     # 🔴 A broadcast reaches every non-program node, excluding the sender and any
     #    removed node. Program nodes are dropped in the selection itself, since
     #    naming one as a recipient is refused and would fail the whole broadcast.
