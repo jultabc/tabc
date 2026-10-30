@@ -75,7 +75,7 @@ DB_PATH = os.environ.get(
 #    drifted once already — 0.1.0.post1 shipped while this said 0.1.0. Bump
 #    both together; tests/test_version_agreement.py fails the build otherwise.
 #    Do not copy the number into documentation.
-__version__ = "0.2.4.1"  # internal test build, not a release (user 2026-10-30)
+__version__ = "0.2.4.2"  # internal test build, not a release (user 2026-10-30)
 PROTOCOL_VERSION = "tabus.v1"
 
 # TTLs. Past these, a derived status counts as old.
@@ -1924,6 +1924,13 @@ def bus_rotate_key(con, node_id, new_pubkey, by="operator"):
 SEND_CHECK_PASSED = "send-check-passed"
 
 
+# 🔴 The send gate's conditions, written once. _send_blockers (the gate) and
+#    bus_inbox_status (what `tabc status` shows as blocking) both build on these, so
+#    the two cannot drift apart.
+BLOCKING_STATES_SQL = "d.state IN ('ACCEPTED','CLAIMED')"
+DM_SCOPE_SQL = "m.tac_id IS NULL AND m.broadcast = 0"
+
+
 def _send_blockers(con, sender_id, scope_sql, scope_params):
     """Unread deliveries to the sender that block a send: (count, oldest first list).
 
@@ -1932,9 +1939,7 @@ def _send_blockers(con, sender_id, scope_sql, scope_params):
     Only deliveries addressed to the sender are read, so the list never shows
     another node's mail. This query changes no state.
     """
-    where = (
-        "d.recipient_id = ? AND d.state IN ('ACCEPTED','CLAIMED') AND " + scope_sql
-    )
+    where = f"d.recipient_id = ? AND {BLOCKING_STATES_SQL} AND " + scope_sql
     params = (sender_id, *scope_params)
     n = con.execute(
         "SELECT COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
@@ -1956,6 +1961,87 @@ def _send_blockers(con, sender_id, scope_sql, scope_params):
         }
         for r in rows
     ]
+
+
+def bus_inbox_status(con, node):
+    """What is unread in `node`'s mailbox, and where it blocks a send. Writes nothing.
+
+    Unread is UNREAD_STATES (ACCEPTED, CLAIMED, INJECTED), the range list_unread_titles
+    and `tabc dm` show. Counts are exact (COUNT, no cap). The oldest message is given
+    per group, unopened (ACCEPTED or CLAIMED) and opened but not READ (INJECTED), each
+    from the same rows as that group's count.
+    Blocking is narrower: only ACCEPTED or CLAIMED, and only per target, exactly as
+    the send gate counts it: DMs per sending node, tac messages per tac. Broadcasts
+    never block a send, so they are counted apart.
+    """
+    ph = ",".join("?" * len(UNREAD_STATES))
+    base = (
+        "FROM deliveries d JOIN messages m ON m.id = d.message_id "
+        f"WHERE d.recipient_id = ? AND d.state IN ({ph})"
+    )
+    params = (node, *UNREAD_STATES)
+    by_state = {s: 0 for s in UNREAD_STATES}
+    for r in con.execute(f"SELECT d.state, COUNT(*) c {base} GROUP BY d.state", params):
+        by_state[r["state"]] = r["c"]
+    kind = (
+        "CASE WHEN m.tac_id IS NOT NULL THEN 'tac' "
+        "WHEN m.broadcast = 1 THEN 'broadcast' ELSE 'dm' END"
+    )
+    by_kind = {"dm": 0, "tac": 0, "broadcast": 0}
+    for r in con.execute(f"SELECT {kind} k, COUNT(*) c {base} GROUP BY k", params):
+        by_kind[r["k"]] = r["c"]
+    def oldest(state_sql):
+        o = con.execute(
+            "SELECT m.id, m.sender_id, m.subject, m.accepted_at, m.tac_id, d.state, t.name AS tac_name "
+            "FROM deliveries d JOIN messages m ON m.id = d.message_id "
+            "LEFT JOIN tacs t ON t.tac_id = m.tac_id "
+            f"WHERE d.recipient_id = ? AND {state_sql} "
+            "ORDER BY m.accepted_at, m.rowid LIMIT 1",
+            (node,),
+        ).fetchone()
+        if o is None:
+            return None
+        return {
+            "id": o["id"],
+            "from": o["sender_id"],
+            "subject": o["subject"],
+            "accepted_at": o["accepted_at"],
+            "state": o["state"],
+            "tac": o["tac_id"],
+            "tac_name": o["tac_name"],
+        }
+
+    blocked = f"d.recipient_id = ? AND {BLOCKING_STATES_SQL}"
+    dm = [
+        {"node": r["sender_id"], "unread": r["c"]}
+        for r in con.execute(
+            "SELECT m.sender_id, COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
+            f"WHERE {blocked} AND {DM_SCOPE_SQL} GROUP BY m.sender_id ORDER BY m.sender_id",
+            (node,),
+        )
+    ]
+    tac = [
+        {"tac": r["tac_id"], "name": r["name"], "unread": r["c"]}
+        for r in con.execute(
+            "SELECT m.tac_id, t.name, COUNT(*) c FROM deliveries d JOIN messages m ON m.id = d.message_id "
+            "LEFT JOIN tacs t ON t.tac_id = m.tac_id "
+            f"WHERE {blocked} AND m.tac_id IS NOT NULL GROUP BY m.tac_id ORDER BY m.tac_id",
+            (node,),
+        )
+    ]
+    return {
+        "node": node,
+        "unread": sum(by_state.values()),
+        "by_state": by_state,
+        "by_kind": by_kind,
+        # 🔴 One oldest per group, not one across all three states: an old opened
+        #    (INJECTED) message would otherwise hide the unopened one that blocks.
+        "oldest": {
+            "unopened": oldest(BLOCKING_STATES_SQL),
+            "opened_not_read": oldest("d.state = 'INJECTED'"),
+        },
+        "blocking": {"dm": dm, "tac": tac},
+    }
 
 
 def bus_send(
@@ -2129,7 +2215,7 @@ def bus_send(
     # still contain mail accepted before a node switched to --program; that stale
     # unread state must not stop its one-way event stream.
     if not tac_id and not broadcast and not sender_is_program:
-        dm_scope = "m.tac_id IS NULL AND m.broadcast = 0 AND m.sender_id "
+        dm_scope = DM_SCOPE_SQL + " AND m.sender_id "
         blocked = []
         counts = []
         for r in valid:

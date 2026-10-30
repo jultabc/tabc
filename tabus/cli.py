@@ -77,6 +77,7 @@ MAPPING = {
     "beat": "/beat",
     "send": "/send",
     "send_check": "/send_check",
+    "status": "/status",
     "who": "/who",
     "snooze": "/snooze",
     "pull": "/pull",
@@ -533,7 +534,7 @@ def _send_check(a, mid, body):
     Exit codes (the meanings in the module docstring; 3 is this command's own):
       0  not blocked at the moment of the check
       1  the check failed while running (connection, server error, tac lookup); retry may work
-      2  refused to start: this daemon has no /send_check, or no such tac; retrying gives the same
+      2  refused: this daemon has no /send_check, no such tac, or HTTP 400 / 401 / 403; retrying gives the same
       3  the send would be refused (UNREAD_BLOCKED or another refusal)
     🔴 A failed check is never reported as "not blocked". A daemon without
        /send_check answers 404 and has stored nothing, because the check never
@@ -568,12 +569,79 @@ def _send_check(a, mid, body):
     if code == 404 and r.get("error") == "not found":
         print("check failed: this tabd has no /send_check (older than 0.2.4.1); nothing was sent")
         sys.exit(2)
+    if code in (400, 401, 403):
+        # A refused request repeats the same way: wrong node, bad signature, bad input.
+        print(f"check failed: HTTP {code}: {r.get('error') or r}")
+        sys.exit(2)
     if code != 200 or "would_send" not in r:
         print(f"check failed: HTTP {code}: {r.get('error') or r}")
         sys.exit(1)
     for line in _send_check_lines(r):
         print(line)
     sys.exit(0 if r["would_send"] else 3)
+
+
+def _status_lines(r):
+    """Lines for a /status answer. A pure function."""
+    bs = r.get("by_state") or {}
+    bk = r.get("by_kind") or {}
+    unopened = bs.get("ACCEPTED", 0) + bs.get("CLAIMED", 0)
+    opened = bs.get("INJECTED", 0)
+    lines = [
+        f"inbox {r.get('node')} as of {r.get('checked_at')}",
+        f"  unread {r.get('unread', 0)}: not opened {unopened} · opened, not marked READ {opened}",
+        f"  by kind: dm {bk.get('dm', 0)} · tac {bk.get('tac', 0)} · broadcast {bk.get('broadcast', 0)}",
+    ]
+    old = r.get("oldest") or {}
+    for key, label in (("unopened", "oldest not opened"), ("opened_not_read", "oldest opened, not READ")):
+        m = old.get(key)
+        if m:
+            where = f"  tac {m.get('tac_name') or m.get('tac')}" if m.get("tac") else ""
+            lines.append(
+                f"  {label}: {m.get('accepted_at')}  from {m.get('from')}  {m.get('subject')}"
+                f"  id={str(m.get('id', ''))[:ID_PREFIX_LEN]}{where}"
+            )
+    blk = r.get("blocking") or {}
+    targets = [f"dm to {d['node']} ({d['unread']})" for d in blk.get("dm") or []]
+    targets += [f"tac {t.get('name') or t['tac']} ({t['unread']})" for t in blk.get("tac") or []]
+    if targets:
+        lines.append("  a send is refused until these are opened: " + " · ".join(targets))
+    else:
+        lines.append("  no send is blocked by unread mail")
+    if bk.get("broadcast"):
+        lines.append("  broadcasts never block a send")
+    if old.get("unopened"):
+        lines.append("  open with: tabc open --node <you> --id <id>")
+    lines.append("  as of that moment only; mail can arrive or be opened right after")
+    return lines
+
+
+def fn_status(a):
+    """Read-only view of this node's mailbox. Opens nothing, marks nothing.
+
+    Exit codes (the meanings in the module docstring):
+      0  read the status (whatever the unread count)
+      1  the query failed while running (connection, server error); retry may work
+      2  refused: this daemon has no /status (older than 0.2.4.2), or HTTP 400 / 401 / 403
+    🔴 A failed query is never shown as zero unread.
+    """
+    node = _require_acting_node(getattr(a, "node", None))
+    try:
+        code, r = call("GET", f"{MAPPING['status']}?node={node}", node=node)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"status failed: {type(e).__name__}: {e} — do not assume the inbox is clear")
+        sys.exit(1)
+    if code == 404 and r.get("error") == "not found":
+        print("status failed: this tabd has no /status (older than 0.2.4.2) — do not assume the inbox is clear")
+        sys.exit(2)
+    if code in (400, 401, 403):
+        print(f"status failed: HTTP {code}: {r.get('error') or r}")
+        sys.exit(2)
+    if code != 200 or "by_state" not in r:
+        print(f"status failed: HTTP {code}: {r.get('error') or r} — do not assume the inbox is clear")
+        sys.exit(1)
+    for line in _status_lines(r):
+        print(line)
 
 
 def fn_who(_a):
@@ -1320,6 +1388,11 @@ COMMANDS = {
                 ),
             ),
         ],
+    ),
+    "status": (
+        fn_status,
+        "this node's unread mail: counts, the oldest, and where it blocks a send. Opens and marks nothing. Exit 0 read, 1 query failed, 2 daemon cannot answer",
+        [(("--node",), dict(default=None, help="acting node; falls back to TABC_NODE"))],
     ),
     "who": (fn_who, "who is present, and how much is pending", [(("--node",), dict(default=None, help="acting node; falls back to TABC_NODE"))]),
     "snooze": (
