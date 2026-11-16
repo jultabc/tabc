@@ -32,6 +32,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import reply_link
 from . import nodekey  # base58 signature decoding, for verifying /send
 from .send_refusal import declared_length, request_length_refusal
 from . import bus as tabus  # the store; kept under its old name so call sites read the same
@@ -394,6 +395,27 @@ class BusHandler(BaseHTTPRequestHandler):
             finally:
                 con.close()
             return self._json(200, {"messages": messages})
+
+        if path == "/thread":
+            # 🔴 Read only, like /status: one thread as this node sees it. A message
+            #    the node neither sent nor received is not listed, and an id it cannot
+            #    see is refused with the same code as an id that does not exist.
+            if not self._authorized():
+                return self._json(401, {"error": "token"})
+            node = q.get("node")
+            if not node:
+                return self._json(400, {"error": "node is required"})
+            if node != self._acting():
+                return self._json(403, {"error": "a node may read only its own threads"})
+            con = self._connect()
+            rows, refusal = reply_link.thread_view(con, node, q.get("id", ""))
+            con.close()
+            if refusal is not None:
+                self._log_reply_refusal(node, refusal)
+                body = {"error": refusal}
+                body.update(refusal.fields())
+                return self._json(404, body)
+            return self._json(200, {"messages": rows, "checked_at": tabus.now_iso()})
 
         if path == "/status":
             # 🔴 Read only: no stamp_mailbox_open, no state change. /mailbox records a
@@ -771,6 +793,7 @@ class BusHandler(BaseHTTPRequestHandler):
             )
             if mid is None:
                 con.close()
+                self._log_reply_refusal(data.get("from", ""), info)
                 # 🔴 `error` stays the sentence older clients read. A coded refusal adds
                 #    code, message, details and retry next to it; the status stays 400.
                 refused = {"error": info}
@@ -806,6 +829,7 @@ class BusHandler(BaseHTTPRequestHandler):
             )
             con.close()
             if mid is None:
+                self._log_reply_refusal(data.get("from", ""), info)
                 refused = {"error": info, "would_send": False}
                 if hasattr(info, "fields"):
                     refused.update(info.fields())
@@ -829,6 +853,9 @@ class BusHandler(BaseHTTPRequestHandler):
             #    When it grew the third value this caller was not updated, and
             #    dict(rows[0]) blew up here.
             out, quarantined, _lost = tabus.reopen_unread(con, node, full_id)
+            # The parent shown above a reply: its subject only when this node can
+            # see the parent, its id alone otherwise.
+            parent = reply_link.parent_of(con, node, full_id)
             con.close()
             for q in quarantined:
                 pass  # quarantined rows are not mixed into the response; the first
@@ -844,6 +871,7 @@ class BusHandler(BaseHTTPRequestHandler):
                     "state": r0["state"],
                     "from": r0["sender_id"],
                     "body": r0["body"],
+                    "reply_to": parent,
                 },
             )
 
@@ -949,6 +977,17 @@ class BusHandler(BaseHTTPRequestHandler):
             return self._json(200 if ok else 409, body)
         body.update(msg.fields())
         return self._json(400, body)
+
+    def _log_reply_refusal(self, node, refusal):
+        # 🔴 The only place "no such message" and "a message this node cannot see"
+        #    are told apart. The response carries one code for both.
+        internal = getattr(refusal, "internal", None)
+        if internal:
+            print(
+                f"[tabd] reply target unavailable node={node} "
+                f"target={refusal.details.get('target')} reason={internal}",
+                flush=True,
+            )
 
     def log_message(self, fmt, *args):  # noqa: N802
         print(f"[tabd] {self.address_string()} {fmt % args}", flush=True)

@@ -85,6 +85,7 @@ MAPPING = {
     "send": "/send",
     "send_check": "/send_check",
     "status": "/status",
+    "thread": "/thread",
     "who": "/who",
     "snooze": "/snooze",
     "pull": "/pull",
@@ -445,6 +446,26 @@ def _refusal_line(r):
     return f"code {r['code']}"
 
 
+def _candidate_lines(r):
+    """The ids an ambiguous --re prefix matched, so the next try can be exact."""
+    details = r.get("details") if isinstance(r.get("details"), dict) else {}
+    if r.get("code") != "REPLY_TARGET_AMBIGUOUS":
+        return []
+    lines = [f"candidate {c}" for c in details.get("candidates") or []]
+    if details.get("more"):
+        lines.append(f"and {details['more']} more")
+    return lines
+
+
+def _reply_line(parent):
+    """One header line above a reply: the parent's short id and subject, or the
+    short id alone when this node cannot see the parent."""
+    if not isinstance(parent, dict) or not parent.get("id"):
+        return None
+    short = parent["id"][:ID_PREFIX_LEN]
+    return f"re      {short} {parent['subject']}" if parent.get("subject") else f"re      {short}"
+
+
 def fn_send(a):
     # 🔴 --id lets a caller retry without storing twice. The daemon treats the same id
     #    with the same envelope as a resend and the same id with a changed envelope as
@@ -488,6 +509,8 @@ def fn_send(a):
         "priority": a.priority,
         "message_id": mid,
     }
+    if getattr(a, "re", None) is not None:
+        payload["reply_to"] = a.re
     if group:
         payload["tac"] = group
     if bcast:
@@ -501,6 +524,8 @@ def fn_send(a):
         print("failed:", r.get("error"))
         if r.get("code"):
             print(f"  {_refusal_line(r)}")
+        for line in _candidate_lines(r):
+            print(f"  {line}")
         sys.exit(1)
     print(f"stored id={r['id']}")
     # 🔴 Print what the server actually stored, read back from its response, not
@@ -563,6 +588,8 @@ def _send_check(a, mid, body):
             "priority": a.priority,
             "message_id": mid,
         }
+        if getattr(a, "re", None) is not None:
+            payload["reply_to"] = a.re
         if group:
             payload["tac"] = group
         if getattr(a, "broadcast", False):
@@ -658,6 +685,52 @@ def fn_status(a):
         sys.exit(1)
     for line in _status_lines(r):
         print(line)
+
+
+def fn_thread(a):
+    """One thread as this node sees it: indentation is reply depth. Read only.
+
+    Exit codes (the meanings in the module docstring):
+      0  shown
+      1  the query failed while running (connection, server error); retry may work
+      2  refused: this daemon has no /thread (older than 0.2.4.4), no such message for
+         this node, an ambiguous or short id, or HTTP 400 / 401 / 403
+    """
+    node = _require_acting_node(getattr(a, "node", None))
+    try:
+        code, r = call("GET", f"{MAPPING['thread']}?node={node}&id={a.id}", node=node)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"thread failed: {type(e).__name__}: {e}")
+        sys.exit(1)
+    if code == 404 and r.get("error") == "not found":
+        print("thread failed: this tabd has no /thread (older than 0.2.4.4)")
+        sys.exit(2)
+    if code in (400, 401, 403, 404):
+        print(f"thread failed: {r.get('error') or r}")
+        if r.get("code"):
+            print(f"  {_refusal_line(r)}")
+        for line in _candidate_lines(r):
+            print(f"  {line}")
+        sys.exit(2)
+    if code != 200 or "messages" not in r:
+        print(f"thread failed: HTTP {code}: {r.get('error') or r}")
+        sys.exit(1)
+    for line in _thread_lines(r["messages"]):
+        print(line)
+
+
+def _thread_lines(messages):
+    """A pure function: rows from /thread to printed lines."""
+    lines = []
+    for m in messages:
+        pad = "  " * m.get("depth", 0)
+        to = ",".join(m.get("recipients") or []) or "-"
+        mark = "(re: not visible) " if m.get("parent_hidden") else ""
+        lines.append(
+            f"{pad}{m['accepted_at'][:16]} {m['sender_id']} → {to} · "
+            f"{mark}{m['subject']} · {m['id'][:ID_PREFIX_LEN]}"
+        )
+    return lines
 
 
 def fn_who(_a):
@@ -801,8 +874,10 @@ def fn_open(a):
         return
     print(
         f"\n{'='*60}\nid      {r['id']}\nfrom    {r.get('sender_id') or r.get('from')}"
-        f"\n{'-'*60}"
     )
+    if _reply_line(r.get("reply_to")):
+        print(_reply_line(r.get("reply_to")))
+    print("-" * 60)
     print(r.get("body") or "(no body)")
     print("=" * 60)
     if r.get("state") == "INJECTED":
@@ -883,8 +958,11 @@ def fn_read(a):
         opened_id = orr.get("id", mid)
         print(
             f"\n{'='*60}\nid      {opened_id}"
-            f"\nfrom    {orr.get('sender_id') or orr.get('from')}\n{'-'*60}"
+            f"\nfrom    {orr.get('sender_id') or orr.get('from')}"
         )
+        if _reply_line(orr.get("reply_to")):
+            print(_reply_line(orr.get("reply_to")))
+        print("-" * 60)
         print(orr.get("body") or "(no body)")
         print("=" * 60)
         # 🔴 Now, and only now, advance this one id to READ. READ follows INJECTED,
@@ -1397,6 +1475,13 @@ COMMANDS = {
                 ),
             ),
             (
+                ("--re",),
+                dict(
+                    default=None,
+                    help="reply to a message you sent or received: its full id or at least its first 8 characters. Recipients still come from --to, --tac or --broadcast",
+                ),
+            ),
+            (
                 ("--check",),
                 dict(
                     action="store_true",
@@ -1409,6 +1494,14 @@ COMMANDS = {
         fn_status,
         "this node's unread mail: counts, the oldest, and where it blocks a send. Opens and marks nothing. Exit 0 read, 1 query failed, 2 daemon cannot answer",
         [(("--node",), dict(default=None, help="acting node; falls back to TABC_NODE"))],
+    ),
+    "thread": (
+        fn_thread,
+        "one thread as this node sees it, replies indented under what they answer. Only messages this node sent or received. Opens and marks nothing. Exit 0 shown, 1 query failed, 2 refused",
+        [
+            (("--node",), dict(default=None, help="acting node; falls back to TABC_NODE")),
+            (("id",), dict(help="any message in the thread: full id or at least its first 8 characters")),
+        ],
     ),
     "who": (fn_who, "who is present, and how much is pending", [(("--node",), dict(default=None, help="acting node; falls back to TABC_NODE"))]),
     "snooze": (

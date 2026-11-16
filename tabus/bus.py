@@ -46,6 +46,7 @@ import json
 import os
 
 from . import paths
+from .reply_link import resolve_reply_target
 from .send_refusal import (  # the limits stay importable as tabus.MAX_*_BYTES
     MAX_BODY_BYTES,
     MAX_SUBJECT_BYTES,
@@ -75,7 +76,7 @@ DB_PATH = os.environ.get(
 #    drifted once already — 0.1.0.post1 shipped while this said 0.1.0. Bump
 #    both together; tests/test_version_agreement.py fails the build otherwise.
 #    Do not copy the number into documentation.
-__version__ = "0.2.4.3"  # internal test build, not a release (user 2026-10-30)
+__version__ = "0.2.4.4"  # internal test build, not a release (user 2026-10-30)
 PROTOCOL_VERSION = "tabus.v1"
 
 # TTLs. Past these, a derived status counts as old.
@@ -2116,6 +2117,17 @@ def bus_send(
             None,
             f"a removed node cannot send: {sender_id} (restore it first)",
         )
+    # 🔴 A reply names a message the sender sent or received, by full id or a
+    #    prefix of at least 8 characters. Anything else is refused here, before any
+    #    write: an unknown id used to escape as a foreign-key error. The stored
+    #    reply_to is the full id this resolves to, so a resend with the same id
+    #    compares like with like.
+    reply_parent = None
+    if reply_to is not None:
+        reply_parent, _refusal = resolve_reply_target(con, sender_id, reply_to)
+        if _refusal is not None:
+            return None, _refusal
+        reply_to = reply_parent["id"]
     sender_is_program = _is_program(con, sender_id)
     # 🔴 A broadcast reaches every non-program node, excluding the sender and any
     #    removed node. Program nodes are dropped in the selection itself, since
@@ -2265,19 +2277,13 @@ def bus_send(
 
     mid = message_id or str(uuid.uuid4())
     ts = now_iso()
-    thread = (
-        thread_id
-        or (
-            reply_to
-            and (
-                con.execute(
-                    "SELECT thread_id FROM messages WHERE id=?", (reply_to,)
-                ).fetchone()
-                or {"thread_id": None}
-            )["thread_id"]
-        )
-        or mid
-    )
+    # 🔴 A reply joins its parent's thread, and the bus decides that: a thread_id
+    #    the client sent is ignored when reply_to is set. Without reply_to the
+    #    client's thread_id is kept, as before.
+    if reply_parent is not None:
+        thread = reply_parent["thread_id"]
+    else:
+        thread = thread_id or mid
     # 🔴 The sender is authenticated at the daemon: every request is signed by the
     #    acting node's key, and /send requires the message `from` to equal that node.
     #    So the sender is already proven here, and sending as another node is refused
