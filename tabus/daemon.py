@@ -403,14 +403,24 @@ class BusHandler(BaseHTTPRequestHandler):
             #    see is refused with the same code as an id that does not exist.
             if not self._authorized():
                 return self._json(401, {"error": "token"})
-            node = q.get("node")
+            # 🔴 Decoded like /tac_lookup: the CLI percent-encodes, and a raw & or #
+            #    in an id cannot become another parameter. One value per key; a
+            #    repeated key is refused rather than one copy silently winning.
+            from urllib.parse import parse_qs
+
+            params = parse_qs(query, keep_blank_values=True)
+            if any(len(v) != 1 for v in params.values()):
+                return self._json(400, {"error": "each parameter once"})
+            node = params.get("node", [""])[0]
             if not node:
                 return self._json(400, {"error": "node is required"})
             if node != self._acting():
                 return self._json(403, {"error": "a node may read only its own threads"})
             con = self._connect()
-            rows, refusal = reply_link.thread_view(con, node, q.get("id", ""))
-            con.close()
+            try:
+                rows, refusal = reply_link.thread_view(con, node, params.get("id", [""])[0])
+            finally:
+                con.close()
             if refusal is not None:
                 self._log_reply_refusal(node, refusal)
                 body = {"error": refusal}
@@ -981,12 +991,14 @@ class BusHandler(BaseHTTPRequestHandler):
 
     def _log_reply_refusal(self, node, refusal):
         # 🔴 The only place "no such message" and "a message this node cannot see"
-        #    are told apart. The response carries one code for both.
+        #    are told apart. The response carries one code for both. The target
+        #    passed the shape check (id characters only) and is written with repr,
+        #    so a caller cannot add a line to this log.
         internal = getattr(refusal, "internal", None)
         if internal:
             print(
                 f"[tabd] reply target unavailable node={node} "
-                f"target={refusal.details.get('target')} reason={internal}",
+                f"target={refusal.details.get('target')!r} reason={internal}",
                 flush=True,
             )
 

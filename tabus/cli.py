@@ -35,6 +35,7 @@ from . import paths, route_capture
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -698,7 +699,9 @@ def fn_thread(a):
     """
     node = _require_acting_node(getattr(a, "node", None))
     try:
-        code, r = call("GET", f"{MAPPING['thread']}?node={node}&id={a.id}", node=node)
+        # 🔴 Quoted: an id with & or # would otherwise become another parameter.
+        qs = urllib.parse.urlencode({"node": node, "id": a.id})
+        code, r = call("GET", f"{MAPPING['thread']}?{qs}", node=node)
     except (urllib.error.URLError, OSError, ValueError) as e:
         print(f"thread failed: {type(e).__name__}: {e}")
         sys.exit(1)
@@ -724,7 +727,13 @@ def _thread_lines(messages):
     lines = []
     for m in messages:
         pad = "  " * m.get("depth", 0)
-        to = ",".join(m.get("recipients") or []) or "-"
+        dest = m.get("to") or {}
+        if dest.get("tac"):
+            to = f"tac {dest['tac']}"
+        elif dest.get("broadcast"):
+            to = "broadcast"
+        else:
+            to = ",".join(dest.get("nodes") or []) or "-"
         mark = "(re: not visible) " if m.get("parent_hidden") else ""
         lines.append(
             f"{pad}{m['accepted_at'][:16]} {m['sender_id']} → {to} · "
@@ -1478,7 +1487,7 @@ COMMANDS = {
                 ("--re",),
                 dict(
                     default=None,
-                    help="reply to a message you sent or received: its full id or at least its first 8 characters. Recipients still come from --to, --tac or --broadcast",
+                    help="reply to a message you sent, received, or can read in one of your tacs: its full id or at least its first 8 characters (0-9, a-f, -; case is folded). Recipients still come from --to, --tac or --broadcast",
                 ),
             ),
             (
