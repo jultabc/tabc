@@ -98,6 +98,49 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(adapter.tabc_open(mid)["state"], "INJECTED")
         self.assertIn("id", adapter.tabc_tac_send(tac, "reply", "opened"))
 
+    def test_reply_to_thread_pages_and_marks_nothing(self):
+        root = adapter.tabc_send(self.bob, "review request", "please look")["id"]
+        adapter.NODE = self.bob
+        self.assertEqual(adapter.tabc_open(root)["state"], "INJECTED")
+        self.assertEqual(adapter.tabc_ack(root)["ok"], True)
+        replies = []
+        for n in range(3):
+            r = adapter.tabc_send(self.alice, f"verdict {n}", "fix x", reply_to=root[:8])
+            self.assertIn("id", r, r)
+            replies.append(r["id"])
+        # An id this node cannot see: one code, nothing stored.
+        before = len(adapter.tabc_sent(limit=200)["messages"])
+        refused = adapter.tabc_send(self.alice, "s", "b", reply_to="bbbbbbbb-0000-4000-8000-000000000009")
+        self.assertEqual(refused.get("code"), "REPLY_TARGET_UNAVAILABLE", refused)
+        self.assertEqual(len(adapter.tabc_sent(limit=200)["messages"]), before)
+        with self.assertRaises(ValueError):
+            adapter.tabc_send(self.alice, "s", "b", reply_to="  ")
+        # Paging: 4 rows, 2 per page.
+        adapter.NODE = self.alice
+        unread_before = len(adapter.tabc_dm()["unread"])
+        first = adapter.tabc_thread(root[:8], limit=2)
+        # accepted_at is kept to the second, so replies sent within one second
+        # are ordered by id.
+        order = sorted(replies)
+        self.assertEqual([m["id"] for m in first["messages"]], [root, order[0]], first)
+        self.assertEqual((first["total"], first["returned"], first["more"]), (4, 2, True))
+        self.assertEqual(first["next_after"], order[0])
+        self.assertFalse(first["messages"][1]["parent_elsewhere"])
+        # Linked to the root, and addressed only to the named recipient.
+        self.assertEqual(first["messages"][1]["reply_to"], root)
+        self.assertEqual(first["messages"][1]["to"], {"nodes": [self.alice]})
+        second = adapter.tabc_thread(root, limit=2, after=first["next_after"])
+        self.assertEqual([m["id"] for m in second["messages"]], order[1:])
+        self.assertTrue(all(m["parent_elsewhere"] and not m["parent_hidden"] for m in second["messages"]))
+        self.assertEqual((second["more"], second["next_after"]), (False, None))
+        # Read only: alice's unread replies stay unread.
+        self.assertEqual(len(adapter.tabc_dm()["unread"]), unread_before)
+        self.assertEqual(unread_before, 3)
+        bad = adapter.tabc_thread(root, limit=2, after=str(uuid.uuid4()))
+        self.assertEqual((bad.get("status"), bad.get("code")), (400, "THREAD_PAGE_INVALID"), bad)
+        with self.assertRaises(ValueError):
+            adapter.tabc_thread(root, limit=501)
+
     def test_send_retry_uses_same_id(self):
         mid = str(uuid.uuid4())
         first = adapter.tabc_send(self.bob, "retry", "same", message_id=mid)

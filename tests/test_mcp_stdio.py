@@ -52,9 +52,12 @@ class StdioTests(unittest.TestCase):
                     await session.initialize()
                     listed = await session.list_tools()
                     tools = {tool.name: tool for tool in listed.tools}
-                    self.assertEqual(len(tools), 10)
+                    self.assertEqual(len(tools), 11)
                     self.assertFalse(tools["tabc_who"].annotations.readOnlyHint)
                     self.assertTrue(tools["tabc_sent"].annotations.readOnlyHint)
+                    self.assertTrue(tools["tabc_thread"].annotations.readOnlyHint)
+                    self.assertIn("reply_to", tools["tabc_send"].inputSchema["properties"])
+                    self.assertIn("reply_to", tools["tabc_tac_send"].inputSchema["properties"])
                     self.assertFalse(tools["tabc_pull"].annotations.readOnlyHint)
                     self.assertNotIn("sender", tools["tabc_send"].inputSchema["properties"])
                     for name, arguments in (
