@@ -35,7 +35,7 @@ import urllib.request  # noqa: E402
 
 
 def call(base, method, path, payload, acting):
-    body = json.dumps(payload, ensure_ascii=False)
+    body = "" if method == "GET" else json.dumps(payload, ensure_ascii=False)
     req = urllib.request.Request(base + path, method=method)
     req.add_header("Content-Type", "application/json; charset=utf-8")
     ts = str(int(time.time()))
@@ -46,7 +46,7 @@ def call(base, method, path, payload, acting):
     req.add_header("X-Node-Ts", ts)
     req.add_header("X-Node-Sig", sig)
     try:
-        with urllib.request.urlopen(req, data=body.encode("utf-8"), timeout=35) as res:
+        with urllib.request.urlopen(req, data=body.encode("utf-8") if body else None, timeout=35) as res:
             return res.status, json.loads(res.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         try:
@@ -129,8 +129,8 @@ try:
     check("HTTP body never says unseen", "unseen" not in repr(body) and "internal" not in body, body)
     time.sleep(0.3)
     log = open(log_path, encoding="utf-8", errors="replace").read()
-    check("log: unseen", f"node=cy target={root} reason=unseen" in log, log[-600:])
-    check("log: unknown", f"node=cy target={unknown} reason=unknown" in log, log[-600:])
+    check("log: unseen", f"node=cy target='{root}' reason=unseen" in log, log[-600:])
+    check("log: unknown", f"node=cy target='{unknown}' reason=unknown" in log, log[-600:])
 
     r = cli("send", "--sender", "cy", "--to", "ann", "--subject", "s", "--body", "b", "--re", root, "--check")
     check("check exits 3 on unseen", r.returncode == 3, r.stdout + r.stderr)
@@ -144,6 +144,23 @@ try:
     check("thread exits 0 with two rows", r.returncode == 0 and len(lines) == 2, r.stdout + r.stderr)
     check("thread root unindented, reply indented", lines[:1] and not lines[0].startswith(" ") and lines[1].startswith("  "), lines)
     check("thread row content", "ann → bo" in lines[0] and "review request" in lines[0] and reply[:18] in lines[1], lines)
+    # Shape: a target with a newline or a percent-encoded newline never reaches the log.
+    forged = "cccccccc\n[tabd] reply target unavailable node=ivy target=x reason=unseen"
+    code, body = call(base, "POST", "/send", {"from": "bo", "to": ["ann"], "subject": "s", "body": "b", "reply_to": forged}, "bo")
+    check("newline target = 400 INVALID", code == 400 and body.get("code") == "REPLY_TARGET_INVALID", body)
+    r = cli("thread", "--node", "bo", "cccccccc\nx")
+    check("thread with newline id exits 2 INVALID", r.returncode == 2 and "REPLY_TARGET_INVALID" in r.stdout, r.stdout + r.stderr)
+    code, body = call(base, "GET", "/thread?node=bo&id=cccccccc%0Areason%3Dunseen", {}, "bo")
+    check("/thread %0A id = INVALID", code == 404 and body.get("code") == "REPLY_TARGET_INVALID", body)
+    code, body = call(base, "GET", f"/thread?node=bo&id={root}&id={root}", {}, "bo")
+    check("/thread repeated key = 400", code == 400, body)
+    r = cli("thread", "--node", "bo", root[:8] + "&node=cy")
+    check("thread id with & stays one parameter (INVALID, not 403)", r.returncode == 2 and "REPLY_TARGET_INVALID" in r.stdout, r.stdout + r.stderr)
+    time.sleep(0.3)
+    log = open(log_path, encoding="utf-8", errors="replace").read()
+    check("log: no forged line", "target=x reason=unseen" not in log, log[-400:])
+    check("log: every refusal line is one line", all(l.startswith("[tabd]") for l in log.splitlines() if "reason=" in l))
+
     r = cli("thread", "--node", "cy", root)
     check("thread on unseen exits 2", r.returncode == 2 and "REPLY_TARGET_UNAVAILABLE" in r.stdout, r.stdout + r.stderr)
 finally:

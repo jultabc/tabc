@@ -129,12 +129,26 @@ m3, i3 = send("bo", ["ann"], "x", reply_to=ID_C[:10])
 check("4 unseen prefix = unavailable, not ambiguous", m3 is None and code(i3) == "REPLY_TARGET_UNAVAILABLE", i3)
 check("4 wrote nothing", snapshot() == before)
 
-print("5. short, empty, non-string: invalid, no write")
+print("5. shape: short, long, empty, non-string, non-id characters: invalid, no write, not echoed")
 before = snapshot()
-for bad in ("aaaaaaa", "", 7, ["x"]):
+NL = "cccccccc\n[tabd] reply target unavailable node=ivy target=x reason=unseen"
+for bad in ("aaaaaaa", "", 7, ["x"], "a" * 37, "a" * 5000, NL, "aaaaaaaa%", "aaaaaaaa_", "aaaaaaag", "aaaa aaaa"):
     m, i = send("bo", ["ann"], "x", reply_to=bad)
     check(f"5 {bad!r} refused", m is None and code(i) == "REPLY_TARGET_INVALID", i)
 check("5 wrote nothing", snapshot() == before)
+m, i = send("bo", ["ann"], "x", reply_to=NL)
+check("5 newline target not echoed", "\n" not in str(i) and "reason=" not in repr(i.fields()), (str(i), i.fields()))
+m, i = send("bo", ["ann"], "x", reply_to="a" * 5000)
+check("5 long target not echoed", len(str(i)) < 200 and "a" * 40 not in repr(i.fields()), len(str(i)))
+print("5b. case folded once: upper-case hex finds the same message, prefix match is case-sensitive")
+mid, info = send("bo", ["ann"], "upper", reply_to=ID_A.upper())
+check("5b upper full id resolves", mid and con.execute("SELECT reply_to FROM messages WHERE id=?", (mid,)).fetchone()[0] == ID_A, info)
+read_all("ann")
+U = "EEEEEEEE-0000-4000-8000-000000000001"  # stored as typed by a raw HTTP client
+send("ann", ["bo"], "upper stored", message_id=U)
+read_all("bo")
+m, i = send("bo", ["ann"], "x", reply_to="eeeeeeee")
+check("5b a non-canonical stored id is not a prefix match", m is None and code(i) == "REPLY_TARGET_UNAVAILABLE", i)
 
 print("6. send check agrees and writes nothing")
 before = snapshot()
@@ -172,7 +186,7 @@ check("9 stored", m and not code(i), i)
 check("9 parent state unchanged", st0 == st1 == "ACCEPTED", (st0, st1))
 read_all("bo")
 
-print("10. tac: a member replies to tac mail; a later member who never received it cannot")
+print("10. tac: members reply to tac mail, a late member too; a removed member and an outsider cannot")
 tabus.bus_tac_create(con, "rv")
 T = [r["tac_id"] for r in tabus.bus_tac_list(con) if r.get("name") == "rv"][0]
 for n in ("ann", "bo"):
@@ -184,8 +198,17 @@ m, i = send("bo", [], "tac reply", tac_id=T, reply_to=TM)
 check("10 member reply stored", m and not code(i), i)
 read_all("ann")
 tabus.bus_tac_add(con, T, "dee")
-m, i = send("dee", ["ann"], "late", reply_to=TM)
-check("10 late member refused", m is None and code(i) == "REPLY_TARGET_UNAVAILABLE", i)
+m, i = send("dee", ["ann"], "late", reply_to=TM[:8])
+check("10 late member reply stored", m and not code(i), i)
+read_all("ann")
+rows, ref = reply_link.thread_view(con, "dee", TM)
+check("10 late member sees the tac note in the thread", ref is None and TM in [r["id"] for r in rows], ref)
+check("10 tac mail drawn as tac", ref is None and [r["to"] for r in rows if r["id"] == TM] == [{"tac": "rv"}], rows and [r.get("to") for r in rows])
+p = reply_link.parent_of(con, "dee", m)
+check("10 late member sees the parent subject", p == {"id": TM, "subject": "tac note"}, p)
+tabus.bus_tac_remove_member(con, T, "dee")
+m, i = send("dee", ["ann"], "after removal", reply_to=TM)
+check("10 removed member refused (no delivery)", m is None and code(i) == "REPLY_TARGET_UNAVAILABLE", i)
 m, i = send("cy", ["ann"], "dm reply to tac mail it never got", reply_to=TM)
 check("10 outsider refused", m is None and code(i) == "REPLY_TARGET_UNAVAILABLE", i)
 
@@ -228,6 +251,16 @@ check("13 unseen id refused in view", rows is None and code(ref) == "REPLY_TARGE
 before = snapshot()
 reply_link.thread_view(con, "bo", ID_A)
 check("13 view writes nothing", snapshot() == before)
+
+print("13b. broadcast reply drawn as broadcast")
+for n in ("ann", "bo", "cy", "dee"):
+    read_all(n)
+m, i = tabus.bus_send(con, "ann", [], "all hands", "b", broadcast=True, reply_to=ID_A)
+check("13b broadcast reply stored", m and not code(i), i)
+rows, ref = reply_link.thread_view(con, "bo", ID_A)
+check("13b drawn as broadcast", [r["to"] for r in rows if r["id"] == m] == [{"broadcast": True}], [r["to"] for r in rows if r["id"] == m])
+for n in ("ann", "bo", "cy", "dee"):
+    read_all(n)
 
 print("14. long chain: no recursion limit")
 parent = ID_A
