@@ -28,6 +28,7 @@ Exit codes (each command follows this table):
   3   send --check: the send would be refused
 """
 
+import datetime
 import json
 import os
 
@@ -722,8 +723,24 @@ def fn_thread(a):
         print(line)
 
 
-def _thread_lines(messages):
-    """A pure function: rows from /thread to printed lines."""
+def _local_minute(ts, tz=None):
+    """An accepted_at value (UTC, ISO 8601) as minutes in the local zone with
+    its abbreviation, e.g. "2026-11-16 15:36 KST". `tz` is for tests; None
+    means the zone of this machine. A value that does not parse is shown as
+    its first 16 characters, as before."""
+    try:
+        dt = datetime.datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return (ts or "")[:16]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    dt = dt.astimezone(tz)
+    return f"{dt:%Y-%m-%d %H:%M} {dt.tzname()}"
+
+
+def _thread_lines(messages, tz=None):
+    """A pure function: rows from /thread to printed lines. Times are shown
+    in the local zone (`tz` for tests)."""
     lines = []
     for m in messages:
         pad = "  " * m.get("depth", 0)
@@ -736,7 +753,7 @@ def _thread_lines(messages):
             to = ",".join(dest.get("nodes") or []) or "-"
         mark = "(re: not visible) " if m.get("parent_hidden") else ""
         lines.append(
-            f"{pad}{m['accepted_at'][:16]} {m['sender_id']} → {to} · "
+            f"{pad}{_local_minute(m['accepted_at'], tz)} {m['sender_id']} → {to} · "
             f"{mark}{m['subject']} · {m['id'][:ID_PREFIX_LEN]}"
         )
     return lines

@@ -175,6 +175,15 @@ check(
 check("candidate lines only for ambiguous", tcli._candidate_lines({"code": "UNREAD_BLOCKED", "details": {"candidates": ["a"]}}) == [])
 check("reply line hidden parent", tcli._reply_line({"id": "x" * 36}) == "re      " + "x" * 18)
 check("reply line none", tcli._reply_line(None) is None)
+import datetime as _dt  # noqa: E402
+_kst = _dt.timezone(_dt.timedelta(hours=9), "KST")
+check("thread time in local zone", tcli._local_minute("2026-11-16T06:36:12+00:00", _kst) == "2026-11-16 15:36 KST")
+check("thread time crosses the date", tcli._local_minute("2026-11-16T20:05:00+00:00", _kst) == "2026-11-17 05:05 KST")
+check("thread time without zone read as UTC", tcli._local_minute("2026-11-16T06:36:12", _kst) == "2026-11-16 15:36 KST")
+check("thread time unparsable kept", tcli._local_minute("not-a-time-at-all", _kst) == "not-a-time-at-al")
+check("thread time None", tcli._local_minute(None, _kst) == "")
+_row = {"id": "a" * 36, "sender_id": "ann", "subject": "s", "accepted_at": "2026-11-16T06:36:12+00:00", "to": {"nodes": ["bo"]}, "depth": 1}
+check("thread line uses local time", tcli._thread_lines([_row], _kst) == ["  2026-11-16 15:36 KST ann → bo · s · " + "a" * tcli.ID_PREFIX_LEN])
 
 print()
 if FAILS:
