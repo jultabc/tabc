@@ -161,6 +161,34 @@ try:
     check("log: no forged line", "target=x reason=unseen" not in log, log[-400:])
     check("log: every refusal line is one line", all(l.startswith("[tabd]") for l in log.splitlines() if "reason=" in l))
 
+    r = cli("thread", "--node", "bo", "--limit", "1", root[:8])
+    lines = r.stdout.strip().splitlines()
+    check("thread --limit 1 shows one row and the next line", r.returncode == 0 and len(lines) == 2 and lines[1].startswith("… more after this page (1 shown here, 2 in the thread)"), r.stdout + r.stderr)
+    nxt = lines[1].split("--after ")[1].split()[0] if len(lines) == 2 and "--after " in lines[1] else ""
+    check("next_after is the root", nxt == root, lines)
+    r = cli("thread", "--node", "bo", "--limit", "1", "--after", nxt, root[:8])
+    lines = r.stdout.strip().splitlines()
+    check("second page: the reply, marked parent on another page, no next line", r.returncode == 0 and len(lines) == 1 and f"(re: {root[:tcli.ID_PREFIX_LEN]} on another page)" in lines[0], r.stdout + r.stderr)
+    r = cli("thread", "--node", "bo", "--limit", "0", root[:8])
+    check("--limit 0 exits 2 THREAD_PAGE_INVALID", r.returncode == 2 and "THREAD_PAGE_INVALID" in r.stdout, r.stdout + r.stderr)
+    r = cli("thread", "--node", "bo", "--after", "cccccccc-0000-4000-8000-000000000000", root[:8])
+    check("--after not in thread exits 2, not echoed", r.returncode == 2 and "THREAD_PAGE_INVALID" in r.stdout and "cccccccc-0000" not in r.stdout, r.stdout + r.stderr)
+    code, body = call(base, "GET", f"/thread?node=bo&id={root}", {}, "bo")
+    check("/thread without limit: whole small thread, more false", code == 200 and body.get("total") == 2 and body.get("more") is False and body.get("next_after") is None, body)
+    code, body = call(base, "GET", f"/thread?node=bo&id={root}&limit=x1", {}, "bo")
+    check("/thread limit not a number = 400", code == 400 and body.get("code") == "THREAD_PAGE_INVALID", body)
+    for q in (f"id={root}&after=HUSENTINELAFTER", f"id={root}&limit=HUSENTINELLIMIT",
+              f"id={root}&after=HUSENTINEL%0Aline", "id=HUSENTINELID", f"id={root}&limit=1"):
+        call(base, "GET", f"/thread?node=bo&{q}", {}, "bo")
+    time.sleep(0.3)
+    log = open(log_path, encoding="utf-8", errors="replace").read()
+    check("access log: no /thread query value", "HUSENTINEL" not in log, [l for l in log.splitlines() if "HUSENTINEL" in l][:3])
+    check("access log: /thread lines kept without query", log.count("/thread?<query not logged>") >= 5, log[-400:])
+    check("access log: other endpoints unchanged", "POST /send HTTP/1.1" in log, log[-400:])
+    for raw in ("%C2%B2", "%D9%A1", "%EF%BC%91"):
+        code, body = call(base, "GET", f"/thread?node=bo&id={root}&limit={raw}", {}, "bo")
+        check(f"/thread limit {raw} (Unicode digit) = 400", code == 400 and body.get("code") == "THREAD_PAGE_INVALID", body)
+
     r = cli("thread", "--node", "cy", root)
     check("thread on unseen exits 2", r.returncode == 2 and "REPLY_TARGET_UNAVAILABLE" in r.stdout, r.stdout + r.stderr)
 finally:
@@ -183,6 +211,22 @@ check("thread time without zone read as UTC", tcli._local_minute("2026-11-16T06:
 check("thread time unparsable kept", tcli._local_minute("not-a-time-at-all", _kst) == "not-a-time-at-al")
 check("thread time None", tcli._local_minute(None, _kst) == "")
 _row = {"id": "a" * 36, "sender_id": "ann", "subject": "s", "accepted_at": "2026-11-16T06:36:12+00:00", "to": {"nodes": ["bo"]}, "depth": 1}
+from tabus import reply_link as _rl  # noqa: E402
+_rows = [{"id": i, "reply_to": p, "parent_hidden": h} for i, p, h in (("a", None, False), ("b", "a", False), ("c", "b", False), ("d", "z", True))]
+_pg, _meta, _ref = _rl.thread_page(_rows, 2)
+check("page 1", _ref is None and [r["id"] for r in _pg] == ["a", "b"] and _meta == {"total": 4, "returned": 2, "more": True, "next_after": "b"}, (_pg, _meta))
+check("page 1 nothing elsewhere", [r["parent_elsewhere"] for r in _pg] == [False, False])
+_pg, _meta, _ref = _rl.thread_page(_rows, 2, "b")
+check("page 2 elsewhere vs hidden", [(r["id"], r["parent_elsewhere"], r["parent_hidden"]) for r in _pg] == [("c", True, False), ("d", False, True)] and _meta["more"] is False and _meta["next_after"] is None, _pg)
+_pg, _meta, _ref = _rl.thread_page(_rows, 2, "d")
+check("after the last row = empty, no more", _pg == [] and _meta["more"] is False and _meta["next_after"] is None)
+for _bad in (0, 501, True, "2", None.__class__):
+    check(f"limit {_bad!r} refused", _rl.thread_page(_rows, _bad)[2] is not None and _rl.thread_page(_rows, _bad)[2].code == "THREAD_PAGE_INVALID")
+check("unknown after refused", _rl.thread_page(_rows, 2, "q")[2].code == "THREAD_PAGE_INVALID")
+check("rows not changed in place", "parent_elsewhere" not in _rows[0])
+check("tail none when complete", tcli._thread_tail({"more": False}, "bo", "x") is None)
+check("tail none from an old tabd", tcli._thread_tail({"messages": []}, "bo", "x") is None)
+check("tail line", tcli._thread_tail({"more": True, "next_after": "n1", "returned": 2, "total": 9}, "bo", "x") == "… more after this page (2 shown here, 9 in the thread). next: tabc thread --node bo --after n1 x")
 check("thread line uses local time", tcli._thread_lines([_row], _kst) == ["  2026-11-16 15:36 KST ann → bo · s · " + "a" * tcli.ID_PREFIX_LEN])
 
 print()

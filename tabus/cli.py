@@ -689,6 +689,9 @@ def fn_status(a):
         print(line)
 
 
+THREAD_CLI_LIMIT = 100
+
+
 def fn_thread(a):
     """One thread as this node sees it: indentation is reply depth. Read only.
 
@@ -701,7 +704,10 @@ def fn_thread(a):
     node = _require_acting_node(getattr(a, "node", None))
     try:
         # 🔴 Quoted: an id with & or # would otherwise become another parameter.
-        qs = urllib.parse.urlencode({"node": node, "id": a.id})
+        q = {"node": node, "id": a.id, "limit": str(getattr(a, "limit", THREAD_CLI_LIMIT))}
+        if getattr(a, "after", None):
+            q["after"] = a.after
+        qs = urllib.parse.urlencode(q)
         code, r = call("GET", f"{MAPPING['thread']}?{qs}", node=node)
     except (urllib.error.URLError, OSError, ValueError) as e:
         print(f"thread failed: {type(e).__name__}: {e}")
@@ -721,6 +727,18 @@ def fn_thread(a):
         sys.exit(1)
     for line in _thread_lines(r["messages"]):
         print(line)
+    tail = _thread_tail(r, node, a.id)
+    if tail:
+        print(tail)
+
+
+def _thread_tail(r, node, target):
+    """The line under a page that has more after it, else None. A tabd from the
+    first round sends no `more`; its page is the whole thread."""
+    if not r.get("more") or not r.get("next_after"):
+        return None
+    return (f"… more after this page ({r.get('returned')} shown here, {r.get('total')} in the thread). "
+            f"next: tabc thread --node {node} --after {r['next_after']} {target}")
 
 
 def _local_minute(ts, tz=None):
@@ -751,7 +769,12 @@ def _thread_lines(messages, tz=None):
             to = "broadcast"
         else:
             to = ",".join(dest.get("nodes") or []) or "-"
-        mark = "(re: not visible) " if m.get("parent_hidden") else ""
+        if m.get("parent_hidden"):
+            mark = "(re: not visible) "
+        elif m.get("parent_elsewhere"):
+            mark = f"(re: {m['reply_to'][:ID_PREFIX_LEN]} on another page) "
+        else:
+            mark = ""
         lines.append(
             f"{pad}{_local_minute(m['accepted_at'], tz)} {m['sender_id']} → {to} · "
             f"{mark}{m['subject']} · {m['id'][:ID_PREFIX_LEN]}"
@@ -1523,9 +1546,14 @@ COMMANDS = {
     ),
     "thread": (
         fn_thread,
-        "one thread as this node sees it, replies indented under what they answer. Only messages this node sent or received. Opens and marks nothing. Exit 0 shown, 1 query failed, 2 refused",
+        "an outline of one thread as this node sees it: time, sender, recipients, subject and id per message, "
+        "replies indented under what they answer. No bodies (tabc open shows one). Lists only messages this node "
+        "sent, received, or can read in a tac it belongs to now. Times are in this machine's time zone. "
+        "Opens and marks nothing. Exit 0 shown, 1 query failed, 2 refused",
         [
             (("--node",), dict(default=None, help="acting node; falls back to TABC_NODE")),
+            (("--limit",), dict(type=int, default=THREAD_CLI_LIMIT, help=f"rows per page, 1 to 500 (default {THREAD_CLI_LIMIT})")),
+            (("--after",), dict(default=None, help="continue after this id: the next_after the previous page printed")),
             (("id",), dict(help="any message in the thread: full id or at least its first 8 characters")),
         ],
     ),
