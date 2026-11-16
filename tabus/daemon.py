@@ -25,6 +25,7 @@ stop file and no signal handler, so SIGTERM and SIGINT end it with the signal
 
 import errno
 import json
+from http import HTTPStatus
 import os
 import socket
 import sys
@@ -426,7 +427,22 @@ class BusHandler(BaseHTTPRequestHandler):
                 body = {"error": refusal}
                 body.update(refusal.fields())
                 return self._json(404, body)
-            return self._json(200, {"messages": rows, "checked_at": tabus.now_iso()})
+            # Paging (0.2.4.4 second round). 🔴 Without limit the page is
+            #    THREAD_PAGE_MAX rows, not the smaller default: a CLI from the
+            #    first round sends no limit and reads no `more`, so it should get
+            #    as much as one response allows. New clients send their limit.
+            raw_limit = params.get("limit", [None])[0]
+            limit = reply_link.THREAD_PAGE_MAX
+            if raw_limit is not None:
+                # 🔴 ASCII digits only: str.isdigit() is also true for "²" and other
+                #    Unicode digits, and int("²") raises (jack c16061f8).
+                limit = int(raw_limit) if raw_limit.isascii() and raw_limit.isdigit() and len(raw_limit) <= 6 else -1
+            page, meta, refusal = reply_link.thread_page(rows, limit, params.get("after", [None])[0])
+            if refusal is not None:
+                body = {"error": refusal}
+                body.update(refusal.fields())
+                return self._json(400, body)
+            return self._json(200, {"messages": page, **meta, "checked_at": tabus.now_iso()})
 
         if path == "/status":
             # 🔴 Read only: no stamp_mailbox_open, no state change. /mailbox records a
@@ -1001,6 +1017,18 @@ class BusHandler(BaseHTTPRequestHandler):
                 f"target={refusal.details.get('target')!r} reason={internal}",
                 flush=True,
             )
+
+    def log_request(self, code="-", size="-"):  # noqa: N802
+        # 🔴 /thread takes id, limit and after from the query, and a refused value
+        #    must not come back in a log line any more than in the response (hu
+        #    34b8e754). The access line keeps the method, path and status and drops
+        #    the query. Other endpoints log as before.
+        line = getattr(self, "requestline", "")
+        if (getattr(self, "path", "") or "").split("?", 1)[0] == "/thread":
+            line = f"{getattr(self, 'command', '-')} /thread?<query not logged> {getattr(self, 'request_version', '-')}"
+        if isinstance(code, HTTPStatus):
+            code = code.value
+        self.log_message('"%s" %s %s', line, str(code), str(size))
 
     def log_message(self, fmt, *args):  # noqa: N802
         print(f"[tabd] {self.address_string()} {fmt % args}", flush=True)

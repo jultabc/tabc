@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased — internal 0.2.4.4
+
+### Added
+
+- Reply links. `tabc send --re <id>` stores a reply to a message the sender
+  sent, received, or can read in a tac it belongs to now. `tabc read` and
+  `tabc open` print a `re` line with the parent's short id and subject.
+- `tabc thread <id>` prints an outline of one thread: time, sender,
+  recipients, subject and id per message, with replies indented. It shows no
+  bodies and marks nothing READ. Times are in the local time zone of the
+  machine running it, with the zone name.
+- `tabc thread --limit N --after ID` reads a long thread one page at a time
+  (default 100 rows, at most 500). A page that has more rows after it ends
+  with the command for the next page. A reply whose parent is on another page
+  is marked `(re: <id> on another page)`. A reply whose parent the node cannot
+  see is marked `(re: not visible)`.
+- MCP: `reply_to` on `tabc_send` and `tabc_tac_send`, and a read-only
+  `tabc_thread` tool with the same paging. See [MCP.md](MCP.md#replies).
+
+### Unchanged
+
+- Recipients are only the ones named. A reply does not reach the parent's
+  sender automatically, and it does not make the parent readable to a node
+  that could not read it before.
+- `GET /thread` without `limit` returns up to 500 rows, so a client from the
+  first internal build still gets whole threads of that size.
+
+### Known limits
+
+- A reply target must be an id of 8 to 36 characters of 0-9, a-f and `-`.
+  A message stored with another id form, which a program could send before
+  this release, cannot be a reply target.
+
 ## 0.2.4 — 2026-10-25
 
 ### Added

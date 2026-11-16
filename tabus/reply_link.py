@@ -43,6 +43,10 @@ REPLY_TARGET_MAX = 36
 _ID_CHARS = frozenset("0123456789abcdef-")
 # Candidates listed when a prefix matches more than one visible message.
 AMBIGUOUS_LIST_MAX = 10
+# One /thread page. The default is what a reader takes in at once; the cap
+# bounds one response.
+THREAD_PAGE_DEFAULT = 100
+THREAD_PAGE_MAX = 500
 
 # Three parameters, all the node id.
 _VISIBLE = (
@@ -230,3 +234,54 @@ def thread_view(con, node, target):
         out.append(r)
         stack.extend((c, depth + 1) for c in reversed(children.get(r["id"], [])))
     return out, None
+
+
+def _page_invalid(why):
+    return SendRefusal(
+        f"thread page invalid: {why}",
+        "THREAD_PAGE_INVALID",
+        why,
+        {"field": "limit/after", "max_limit": THREAD_PAGE_MAX},
+        "never",
+    )
+
+
+def thread_page(rows, limit=None, after=None):
+    """One page of thread_view rows, in the same order.
+
+    `after` is the id of the last row of the previous page (the response gives
+    it as next_after). Returns (page, meta, None) or (None, None, refusal).
+    meta: total (rows this node can see in the thread), returned, more,
+    next_after (None when this is the last page).
+    Each row on the page gets parent_elsewhere: True when its parent is a row
+    this node can see that is on another page. That is not parent_hidden,
+    which means the node cannot see the parent at all.
+    🔴 Pages follow the drawn order (depth-first), not time. A reply that
+       arrives between two page reads and lands above `after` is not on a later
+       page; read the thread again from the start to see it. `total` changes
+       then, which is how a reader can notice.
+    """
+    if limit is None:
+        limit = THREAD_PAGE_DEFAULT
+    if type(limit) is not int or not 1 <= limit <= THREAD_PAGE_MAX:
+        return None, None, _page_invalid(f"limit must be an integer from 1 to {THREAD_PAGE_MAX}")
+    start = 0
+    if after is not None:
+        index = {r["id"]: i for i, r in enumerate(rows)}
+        if after not in index:
+            # 🔴 The same answer whether the id does not exist or is outside
+            #    this thread or this node's view; `after` is not repeated back.
+            return None, None, _page_invalid("after must be the id of a row of this thread, as next_after gives it")
+        start = index[after] + 1
+    page = [dict(r) for r in rows[start:start + limit]]
+    on_page = {r["id"] for r in page}
+    for r in page:
+        r["parent_elsewhere"] = bool(r.get("reply_to")) and not r.get("parent_hidden") and r["reply_to"] not in on_page
+    more = start + len(page) < len(rows)
+    meta = {
+        "total": len(rows),
+        "returned": len(page),
+        "more": more,
+        "next_after": page[-1]["id"] if more and page else None,
+    }
+    return page, meta, None
