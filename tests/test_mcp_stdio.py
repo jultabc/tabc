@@ -71,6 +71,13 @@ class StdioTests(unittest.TestCase):
                         self.assertNotIn("error", result.structuredContent, result)
                     invalid = await session.call_tool("tabc_dm", {"limit": 0})
                     self.assertTrue(invalid.isError)
+                    # A coded tabd refusal reaches the client as an MCP error, whole.
+                    refused = await session.call_tool(
+                        "tabc_thread", {"message_id": "00000000-0000-4000-8000-000000000000"})
+                    self.assertTrue(refused.isError, refused)
+                    self.assertEqual(refused.structuredContent["error"], "HTTP_ERROR")
+                    self.assertEqual(refused.structuredContent["status"], 404)
+                    self.assertIn("code", refused.structuredContent)
 
         try:
             asyncio.run(asyncio.wait_for(exercise(), timeout=30))
