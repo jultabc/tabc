@@ -1,5 +1,6 @@
 """MCP adapter tests against an isolated SQLite database and loopback daemon."""
 import http.client
+import importlib.util
 import io
 import json
 import os
@@ -326,6 +327,57 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(result["injected_recorded"])
         self.assertIsNone(result["state"])
         self.assertEqual(result["body"], "data")
+
+
+@unittest.skipUnless(sys.version_info >= (3, 10) and importlib.util.find_spec("mcp") is not None,
+                     "Install .[mcp] on Python 3.10+")
+class ToolErrorFlagTests(unittest.TestCase):
+    """isError on the MCP result: definite failures only. No daemon, keys or network."""
+
+    def call(self, name, arguments, request_results):
+        import anyio
+        from mcp.shared.memory import create_connected_server_and_client_session
+
+        async def go():
+            async with create_connected_server_and_client_session(
+                    adapter.create_server()._mcp_server) as session:
+                return await session.call_tool(name, arguments)
+
+        with patch.object(adapter, "_request", side_effect=request_results):
+            return anyio.run(go)
+
+    def test_coded_refusal_is_an_error_with_the_whole_result(self):
+        refusal = {"ok": False, "error": "HTTP_ERROR", "detail": "{}", "status": 400,
+                   "code": "UNREAD_BLOCKED", "retry": "after_condition"}
+        result = self.call("tabc_send", {"to": "bob", "subject": "s", "body": "b"}, [refusal])
+        self.assertTrue(result.isError)
+        self.assertEqual(result.structuredContent["code"], "UNREAD_BLOCKED")
+        self.assertEqual(json.loads(result.content[0].text)["code"], "UNREAD_BLOCKED")
+        uuid.UUID(result.structuredContent["request_id"])
+
+    def test_unknown_write_is_not_an_error(self):
+        result = self.call("tabc_send", {"to": "bob", "subject": "s", "body": "b"},
+                           [{"ok": False, "error": "UNKNOWN", "detail": "timeout"}])
+        self.assertFalse(result.isError)
+        self.assertEqual(result.structuredContent["error"], "UNKNOWN")
+        self.assertIn("recovery", result.structuredContent)
+
+    def test_partial_open_is_not_an_error(self):
+        mid = str(uuid.uuid4())
+        result = self.call("tabc_open", {"message_id": mid}, [
+            {"ok": True, "id": mid, "body": "data", "state": "CLAIMED"},
+            {"ok": False, "error": "UNKNOWN"}])
+        self.assertFalse(result.isError)
+        self.assertEqual(result.structuredContent["body"], "data")
+
+    def test_success_is_not_an_error(self):
+        result = self.call("tabc_who", {}, [{"ok": True, "nodes": []}])
+        self.assertFalse(result.isError)
+        self.assertEqual(result.structuredContent, {"ok": True, "nodes": []})
+
+    def test_direct_call_still_returns_the_dict(self):
+        with patch.object(adapter, "_request", return_value={"ok": False, "error": "NO_NODE"}):
+            self.assertEqual(adapter.tabc_who()["error"], "NO_NODE")
 
 
 if __name__ == "__main__":

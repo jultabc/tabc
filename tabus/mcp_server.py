@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import http.client
 import json
 import os
@@ -292,6 +293,24 @@ def tabc_thread(message_id: str, limit: int = 50, after: str | None = None) -> d
     return _request("GET", "/thread", params=params)
 
 
+def _published(tool):
+    """The tool as MCP sees it. A result with an error code other than UNKNOWN is a definite
+    failure (a refusal, a bad argument, no node key, no server): it goes out with isError so a
+    client sees the failure without reading the result. UNKNOWN (the write may have been applied)
+    stays a plain result. The result itself is the same dict either way."""
+    from mcp.types import CallToolResult, TextContent
+
+    @functools.wraps(tool)
+    def call(*args, **kwargs):
+        result = tool(*args, **kwargs)
+        if isinstance(result, dict) and "error" in result and result["error"] != "UNKNOWN":
+            text = json.dumps(result, ensure_ascii=False, indent=2)
+            return CallToolResult(content=[TextContent(type="text", text=text)],
+                                  structuredContent=result, isError=True)
+        return result
+    return call
+
+
 def create_server():
     if sys.version_info < (3, 10):
         raise RuntimeError("tabc MCP requires Python 3.10+; the CLI supports Python 3.9+.")
@@ -309,7 +328,7 @@ def create_server():
                  tabc_send, tabc_tacs, tabc_tac_messages, tabc_tac_send, tabc_thread):
         server.tool(annotations=ToolAnnotations(
             readOnlyHint=tool.__name__ in read_only, destructiveHint=False,
-            openWorldHint=False))(tool)
+            openWorldHint=False))(_published(tool))
     return server
 
 
