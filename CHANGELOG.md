@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased — internal 0.2.4.4
+## Unreleased — internal 0.2.4.5
+
+### Changed
+
+- MCP: a tool result with an error code other than `UNKNOWN` (a tabd refusal
+  such as `UNREAD_BLOCKED`, a bad argument, no node key, no server) now
+  returns with `isError` set, so a client sees the failure without reading
+  the result. The result is the same object as before. `UNKNOWN` (the write
+  may have been applied) is not marked as an error. See
+  [MCP.md](MCP.md#errors-and-retries).
+
+## Internal 0.2.4.4
 
 ### Added
 
