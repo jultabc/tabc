@@ -603,7 +603,7 @@ def _send_check(a, mid, body):
         print(f"check failed: {type(e).__name__}: {e}")
         sys.exit(1)
     if code == 404 and r.get("error") == "not found":
-        print("check failed: this tabd has no /send_check (older than 0.2.4.1); nothing was sent")
+        print("check failed: this tabd has no /send_check (older than 0.2.5); nothing was sent")
         sys.exit(2)
     if code in (400, 401, 403):
         # A refused request repeats the same way: wrong node, bad signature, bad input.
@@ -667,7 +667,7 @@ def fn_status(a):
     Exit codes (the iotzu programming guide 3.4 meanings):
       0  read the status (whatever the unread count)
       1  the query failed while running (connection, server error); retry may work
-      2  refused: this daemon has no /status (older than 0.2.4.2), or HTTP 400 / 401 / 403
+      2  refused: this daemon has no /status (older than 0.2.5), or HTTP 400 / 401 / 403
     🔴 A failed query is never shown as zero unread.
     """
     node = _require_acting_node(getattr(a, "node", None))
@@ -677,7 +677,7 @@ def fn_status(a):
         print(f"status failed: {type(e).__name__}: {e} — do not assume the inbox is clear")
         sys.exit(1)
     if code == 404 and r.get("error") == "not found":
-        print("status failed: this tabd has no /status (older than 0.2.4.2) — do not assume the inbox is clear")
+        print("status failed: this tabd has no /status (older than 0.2.5) — do not assume the inbox is clear")
         sys.exit(2)
     if code in (400, 401, 403):
         print(f"status failed: HTTP {code}: {r.get('error') or r}")
@@ -698,7 +698,7 @@ def fn_thread(a):
     Exit codes (the iotzu programming guide 3.4 meanings):
       0  shown
       1  the query failed while running (connection, server error); retry may work
-      2  refused: this daemon has no /thread (older than 0.2.4.4), no such message for
+      2  refused: this daemon has no /thread (older than 0.2.5), no such message for
          this node, an ambiguous or short id, or HTTP 400 / 401 / 403
     """
     node = _require_acting_node(getattr(a, "node", None))
@@ -713,7 +713,7 @@ def fn_thread(a):
         print(f"thread failed: {type(e).__name__}: {e}")
         sys.exit(1)
     if code == 404 and r.get("error") == "not found":
-        print("thread failed: this tabd has no /thread (older than 0.2.4.4)")
+        print("thread failed: this tabd has no /thread (older than 0.2.5)")
         sys.exit(2)
     if code in (400, 401, 403, 404):
         print(f"thread failed: {r.get('error') or r}")
