@@ -49,7 +49,7 @@ default ~/.tabc) and holds it until the process ends; the kernel releases it on
 any exit. A second doorbell on the same state directory exits 75 without reading,
 ringing or recording anything. Two doorbells ringing the same mail would each
 deliver before either records (decide, deliver, record_ring).
-Limits: a doorbell older than 0.2.4.3 takes no lock, so it neither blocks nor is
+Limits: a doorbell older than 0.2.5 takes no lock, so it neither blocks nor is
 blocked; stop it before starting a new one. Two doorbells with different TABC_HOME
 but the same ledger or store are not blocked by this lock.
 
