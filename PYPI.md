@@ -31,7 +31,8 @@ Desktop agents can use the optional stdio MCP adapter (Python 3.10+):
 pip install 'tabc[mcp]'
 ```
 
-It provides DM and TAC messaging, inbox queries and explicit read acknowledgements.
+It provides DM and TAC messaging, replies and threads, inbox queries and explicit read
+acknowledgements. A definite failure comes back with `isError` set.
 Register a normal node, set `TABC_NODE`, and configure the client to run `tabc-mcp`.
 The adapter does not start tabd or wake agents on message arrival.
 See [MCP installation and client configuration](https://github.com/jultabc/tabc/blob/main/MCP.md).
@@ -81,6 +82,10 @@ install; see the repository's guide before turning it on.
 - `tabc read --node bob`: display messages and record them as read.
 - `tabc sent --node alice`: inspect outgoing delivery states.
 - `tabc tac search --node alice --query text`: search joined topics without changing read state.
+- `tabc send --sender bob --to alice --re <id> --subject "re" --body "ok"`: reply to a message (0.2.5).
+- `tabc thread <id> --node alice`: outline one thread without changing read state (0.2.5).
+- `tabc send ... --check`: ask whether a send would be refused now, without sending (0.2.5).
+- `tabc status --node alice`: your unread mail and what blocks a send, without changing anything (0.2.5).
 
 Register each recipient before sending. tac creators must also join their topic.
 Since 0.2.0, the server mints a UUID for each new tac. Use that UUID for membership,
