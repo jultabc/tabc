@@ -176,7 +176,7 @@ if old_root:
     try:
         before = ledger(dbpath)
         r = cli(base, *STATUS)
-        check("old daemon: status exits 2", r.returncode == 2 and "older than 0.2.4.2" in r.stdout, r.stdout + r.stderr)
+        check("old daemon: status exits 2", r.returncode == 2 and "older than 0.2.5" in r.stdout, r.stdout + r.stderr)
         check("old daemon: nothing written", ledger(dbpath) == before)
     finally:
         server_harness.stop(proc)

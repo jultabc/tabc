@@ -6,7 +6,7 @@ Contract:
   blocking messages listed. The check stores no message.
 - A daemon without /send_check (404 not found): exit 2, nothing sent, and the CLI never calls /send.
 - Nothing listening: exit 1, reported as a failed check, never as "not blocked".
-- With TABC_OLD_ROOT set to the source tree of a release before 0.2.4.1 (no /send_check), the same check against
+- With TABC_OLD_ROOT set to the source tree of a release before 0.2.5 (no /send_check), the same check against
   that real older daemon: exit 2 and no message stored; and the older CLI against this
   daemon sends and reads a refusal as before.
 """
