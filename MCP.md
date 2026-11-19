@@ -191,6 +191,10 @@ Only a usable response with a top-level server `code` is a definite refusal.
 A result with an `error` other than `UNKNOWN` is a definite failure and is
 returned with `isError` set; the result object is the same. `UNKNOWN` is not
 marked as an error, because the request may have been applied.
+A partial `tabc_open` is not marked as an error either: the body was received,
+but recording `INJECTED` failed or its outcome is unknown (`state: null`). Its
+result has `ok: false`, `injected_recorded: false` and `ack_error`; check those
+fields, not only `isError`.
 `retry=never` requires a changed request. `retry=after_condition` requires the
 reported condition to be cleared. `retry=as_is` permits the same request after
 stored state has been checked. The full server code, message, details, and retry
