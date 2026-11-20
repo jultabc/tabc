@@ -1,8 +1,6 @@
 # Changelog
 
-## 0.2.5 — unreleased candidate
-
-Not published yet. It collects the internal test builds 0.2.4.1 to 0.2.4.5.
+## 0.2.5 — 2026-11-20
 
 ### Added
 
