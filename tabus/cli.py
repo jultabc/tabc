@@ -19,8 +19,16 @@ Arrival and reading are different layers:
 The register command registers a node without changing the terminal title.
 Process identity comes only from an explicit --node or
 --sender, or from TABC_NODE; no shared on-disk default is trusted.
+
+Exit codes (iotzu programming guide 3.4; each command follows this table):
+  0   done
+  1   the request failed or was refused (connection, server error, a refused send or ack)
+  2   refused to start: missing or invalid input or node identity, a usage error (argparse),
+      a daemon older than the command needs, or HTTP 400 / 401 / 403; repeating gives the same
+  3   send --check: the send would be refused
 """
 
+import datetime
 import json
 import os
 
@@ -28,6 +36,7 @@ from . import paths, route_capture
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -76,6 +85,9 @@ MAPPING = {
     "register": "/register",
     "beat": "/beat",
     "send": "/send",
+    "send_check": "/send_check",
+    "status": "/status",
+    "thread": "/thread",
     "who": "/who",
     "snooze": "/snooze",
     "pull": "/pull",
@@ -436,6 +448,26 @@ def _refusal_line(r):
     return f"code {r['code']}"
 
 
+def _candidate_lines(r):
+    """The ids an ambiguous --re prefix matched, so the next try can be exact."""
+    details = r.get("details") if isinstance(r.get("details"), dict) else {}
+    if r.get("code") != "REPLY_TARGET_AMBIGUOUS":
+        return []
+    lines = [f"candidate {c}" for c in details.get("candidates") or []]
+    if details.get("more"):
+        lines.append(f"and {details['more']} more")
+    return lines
+
+
+def _reply_line(parent):
+    """One header line above a reply: the parent's short id and subject, or the
+    short id alone when this node cannot see the parent."""
+    if not isinstance(parent, dict) or not parent.get("id"):
+        return None
+    short = parent["id"][:ID_PREFIX_LEN]
+    return f"re      {short} {parent['subject']}" if parent.get("subject") else f"re      {short}"
+
+
 def fn_send(a):
     # 🔴 --id lets a caller retry without storing twice. The daemon treats the same id
     #    with the same envelope as a resend and the same id with a changed envelope as
@@ -455,6 +487,8 @@ def fn_send(a):
     body = a.body
     if a.body_file:
         body = open(a.body_file, encoding="utf-8").read()
+    if getattr(a, "check", False):
+        return _send_check(a, mid, body)
     group = getattr(a, "tac", None)
     if group:
         group = _designate_tac(group, a.sender)
@@ -477,6 +511,8 @@ def fn_send(a):
         "priority": a.priority,
         "message_id": mid,
     }
+    if getattr(a, "re", None) is not None:
+        payload["reply_to"] = a.re
     if group:
         payload["tac"] = group
     if bcast:
@@ -490,6 +526,8 @@ def fn_send(a):
         print("failed:", r.get("error"))
         if r.get("code"):
             print(f"  {_refusal_line(r)}")
+        for line in _candidate_lines(r):
+            print(f"  {line}")
         sys.exit(1)
     print(f"stored id={r['id']}")
     # 🔴 Print what the server actually stored, read back from its response, not
@@ -499,6 +537,249 @@ def fn_send(a):
         print(f"  {line}")
     for rid, n in (r.get("pending") or {}).items():
         print(f"  {rid}: {n} pending")
+
+
+def _send_check_lines(r):
+    """Lines for a /send_check answer. A pure function."""
+    if r.get("would_send"):
+        return [
+            "not blocked as of " + str(r.get("checked_at", "now"))
+            + " — recipients: " + ", ".join(r.get("recipients") or []),
+            "  checked at that moment only; the send itself can still be refused",
+        ]
+    lines = ["would be refused: " + str(r.get("error"))]
+    if r.get("code"):
+        lines.append(f"  {_refusal_line(r)}")
+    details = r.get("details") if isinstance(r.get("details"), dict) else {}
+    for m in details.get("messages") or []:
+        lines.append(
+            f"  {str(m.get('id', ''))[:ID_PREFIX_LEN]}  from {m.get('from')}  {m.get('subject')}"
+        )
+    if details.get("more"):
+        lines.append(f"  … {details['more']} more")
+    if details.get("messages"):
+        lines.append("  open them with: tabc open --node <you> --id <id>, then send")
+    return lines
+
+
+def _send_check(a, mid, body):
+    """--check: ask the daemon whether this exact send would go through. Sends nothing.
+
+    Exit codes (the iotzu programming guide 3.4 meanings; 3 is this command's own):
+      0  not blocked at the moment of the check
+      1  the check failed while running (connection, server error, tac lookup); retry may work
+      2  refused: this daemon has no /send_check, no such tac, or HTTP 400 / 401 / 403; retrying gives the same
+      3  the send would be refused (UNREAD_BLOCKED or another refusal)
+    🔴 A failed check is never reported as "not blocked". A daemon without
+       /send_check answers 404 and has stored nothing, because the check never
+       travels on /send, where an older daemon would drop the flag and send.
+    """
+    try:
+        group = getattr(a, "tac", None)
+        if group:
+            group = _designate_tac(group, a.sender)
+        requested = _recipients(a.to)
+        if not requested and not group and not getattr(a, "broadcast", False):
+            print("check failed: a recipient is required — --to <node>, --tac <tac>, or --broadcast")
+            sys.exit(2)
+        payload = {
+            "from": a.sender,
+            "to": requested,
+            "subject": a.subject,
+            "body": body,
+            "priority": a.priority,
+            "message_id": mid,
+        }
+        if getattr(a, "re", None) is not None:
+            payload["reply_to"] = a.re
+        if group:
+            payload["tac"] = group
+        if getattr(a, "broadcast", False):
+            payload["broadcast"] = True
+        code, r = call("POST", MAPPING["send_check"], payload, node=a.sender)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        # _designate_tac exits by itself: 2 for no such tac, 1 for a failed lookup,
+        # which are already the meanings above.
+        print(f"check failed: {type(e).__name__}: {e}")
+        sys.exit(1)
+    if code == 404 and r.get("error") == "not found":
+        print("check failed: this tabd has no /send_check (older than 0.2.5); nothing was sent")
+        sys.exit(2)
+    if code in (400, 401, 403):
+        # A refused request repeats the same way: wrong node, bad signature, bad input.
+        print(f"check failed: HTTP {code}: {r.get('error') or r}")
+        sys.exit(2)
+    if code != 200 or "would_send" not in r:
+        print(f"check failed: HTTP {code}: {r.get('error') or r}")
+        sys.exit(1)
+    for line in _send_check_lines(r):
+        print(line)
+    sys.exit(0 if r["would_send"] else 3)
+
+
+def _status_lines(r):
+    """Lines for a /status answer. A pure function."""
+    bs = r.get("by_state") or {}
+    bk = r.get("by_kind") or {}
+    unopened = bs.get("ACCEPTED", 0) + bs.get("CLAIMED", 0)
+    opened = bs.get("INJECTED", 0)
+    lines = [
+        f"inbox {r.get('node')} as of {r.get('checked_at')}",
+        f"  unread {r.get('unread', 0)}: not opened {unopened} · opened, not marked READ {opened}",
+        f"  by kind: dm {bk.get('dm', 0)} · tac {bk.get('tac', 0)} · broadcast {bk.get('broadcast', 0)}",
+    ]
+    old = r.get("oldest") or {}
+    for key, label in (("unopened", "oldest not opened"), ("opened_not_read", "oldest opened, not READ")):
+        m = old.get(key)
+        if m:
+            where = f"  tac {m.get('tac_name') or m.get('tac')}" if m.get("tac") else ""
+            lines.append(
+                f"  {label}: {m.get('accepted_at')}  from {m.get('from')}  {m.get('subject')}"
+                f"  id={str(m.get('id', ''))[:ID_PREFIX_LEN]}{where}"
+            )
+    blk = r.get("blocking") or {}
+    targets = [f"dm to {d['node']} ({d['unread']})" for d in blk.get("dm") or []]
+    open_tacs = [t for t in blk.get("tac") or [] if not t.get("closed")]
+    closed_tacs = [t for t in blk.get("tac") or [] if t.get("closed")]
+    targets += [f"tac {t.get('name') or t['tac']} ({t['unread']})" for t in open_tacs]
+    if targets:
+        lines.append("  a send is refused until these are opened: " + " · ".join(targets))
+    else:
+        lines.append("  no send is blocked by unread mail")
+    if closed_tacs:
+        lines.append(
+            "  unread in closed tacs (a closed tac refuses sends anyway): "
+            + " · ".join(f"{t.get('name') or t['tac']} ({t['unread']})" for t in closed_tacs)
+        )
+    if bk.get("broadcast"):
+        lines.append("  broadcasts never block a send")
+    if r.get("program"):
+        lines.append("  program node: DMs never block its sends")
+    if old.get("unopened"):
+        lines.append("  open with: tabc open --node <you> --id <id>")
+    lines.append("  as of that moment only; mail can arrive or be opened right after")
+    return lines
+
+
+def fn_status(a):
+    """Read-only view of this node's mailbox. Opens nothing, marks nothing.
+
+    Exit codes (the iotzu programming guide 3.4 meanings):
+      0  read the status (whatever the unread count)
+      1  the query failed while running (connection, server error); retry may work
+      2  refused: this daemon has no /status (older than 0.2.5), or HTTP 400 / 401 / 403
+    🔴 A failed query is never shown as zero unread.
+    """
+    node = _require_acting_node(getattr(a, "node", None))
+    try:
+        code, r = call("GET", f"{MAPPING['status']}?node={node}", node=node)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"status failed: {type(e).__name__}: {e} — do not assume the inbox is clear")
+        sys.exit(1)
+    if code == 404 and r.get("error") == "not found":
+        print("status failed: this tabd has no /status (older than 0.2.5) — do not assume the inbox is clear")
+        sys.exit(2)
+    if code in (400, 401, 403):
+        print(f"status failed: HTTP {code}: {r.get('error') or r}")
+        sys.exit(2)
+    if code != 200 or "by_state" not in r:
+        print(f"status failed: HTTP {code}: {r.get('error') or r} — do not assume the inbox is clear")
+        sys.exit(1)
+    for line in _status_lines(r):
+        print(line)
+
+
+THREAD_CLI_LIMIT = 100
+
+
+def fn_thread(a):
+    """One thread as this node sees it: indentation is reply depth. Read only.
+
+    Exit codes (the iotzu programming guide 3.4 meanings):
+      0  shown
+      1  the query failed while running (connection, server error); retry may work
+      2  refused: this daemon has no /thread (older than 0.2.5), no such message for
+         this node, an ambiguous or short id, or HTTP 400 / 401 / 403
+    """
+    node = _require_acting_node(getattr(a, "node", None))
+    try:
+        # 🔴 Quoted: an id with & or # would otherwise become another parameter.
+        q = {"node": node, "id": a.id, "limit": str(getattr(a, "limit", THREAD_CLI_LIMIT))}
+        if getattr(a, "after", None):
+            q["after"] = a.after
+        qs = urllib.parse.urlencode(q)
+        code, r = call("GET", f"{MAPPING['thread']}?{qs}", node=node)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"thread failed: {type(e).__name__}: {e}")
+        sys.exit(1)
+    if code == 404 and r.get("error") == "not found":
+        print("thread failed: this tabd has no /thread (older than 0.2.5)")
+        sys.exit(2)
+    if code in (400, 401, 403, 404):
+        print(f"thread failed: {r.get('error') or r}")
+        if r.get("code"):
+            print(f"  {_refusal_line(r)}")
+        for line in _candidate_lines(r):
+            print(f"  {line}")
+        sys.exit(2)
+    if code != 200 or "messages" not in r:
+        print(f"thread failed: HTTP {code}: {r.get('error') or r}")
+        sys.exit(1)
+    for line in _thread_lines(r["messages"]):
+        print(line)
+    tail = _thread_tail(r, node, a.id)
+    if tail:
+        print(tail)
+
+
+def _thread_tail(r, node, target):
+    """The line under a page that has more after it, else None. A tabd from the
+    first round sends no `more`; its page is the whole thread."""
+    if not r.get("more") or not r.get("next_after"):
+        return None
+    return (f"… more after this page ({r.get('returned')} shown here, {r.get('total')} in the thread). "
+            f"next: tabc thread --node {node} --after {r['next_after']} {target}")
+
+
+def _local_minute(ts, tz=None):
+    """An accepted_at value (UTC, ISO 8601) as minutes in the local zone with
+    its abbreviation, e.g. "2026-11-16 15:36 KST". `tz` is for tests; None
+    means the zone of this machine. A value that does not parse is shown as
+    its first 16 characters, as before."""
+    try:
+        dt = datetime.datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return (ts or "")[:16]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    dt = dt.astimezone(tz)
+    return f"{dt:%Y-%m-%d %H:%M} {dt.tzname()}"
+
+
+def _thread_lines(messages, tz=None):
+    """A pure function: rows from /thread to printed lines. Times are shown
+    in the local zone (`tz` for tests)."""
+    lines = []
+    for m in messages:
+        pad = "  " * m.get("depth", 0)
+        dest = m.get("to") or {}
+        if dest.get("tac"):
+            to = f"tac {dest['tac']}"
+        elif dest.get("broadcast"):
+            to = "broadcast"
+        else:
+            to = ",".join(dest.get("nodes") or []) or "-"
+        if m.get("parent_hidden"):
+            mark = "(re: not visible) "
+        elif m.get("parent_elsewhere"):
+            mark = f"(re: {m['reply_to'][:ID_PREFIX_LEN]} on another page) "
+        else:
+            mark = ""
+        lines.append(
+            f"{pad}{_local_minute(m['accepted_at'], tz)} {m['sender_id']} → {to} · "
+            f"{mark}{m['subject']} · {m['id'][:ID_PREFIX_LEN]}"
+        )
+    return lines
 
 
 def fn_who(_a):
@@ -642,8 +923,10 @@ def fn_open(a):
         return
     print(
         f"\n{'='*60}\nid      {r['id']}\nfrom    {r.get('sender_id') or r.get('from')}"
-        f"\n{'-'*60}"
     )
+    if _reply_line(r.get("reply_to")):
+        print(_reply_line(r.get("reply_to")))
+    print("-" * 60)
     print(r.get("body") or "(no body)")
     print("=" * 60)
     if r.get("state") == "INJECTED":
@@ -724,8 +1007,11 @@ def fn_read(a):
         opened_id = orr.get("id", mid)
         print(
             f"\n{'='*60}\nid      {opened_id}"
-            f"\nfrom    {orr.get('sender_id') or orr.get('from')}\n{'-'*60}"
+            f"\nfrom    {orr.get('sender_id') or orr.get('from')}"
         )
+        if _reply_line(orr.get("reply_to")):
+            print(_reply_line(orr.get("reply_to")))
+        print("-" * 60)
         print(orr.get("body") or "(no body)")
         print("=" * 60)
         # 🔴 Now, and only now, advance this one id to READ. READ follows INJECTED,
@@ -1237,6 +1523,38 @@ COMMANDS = {
                     help="message UUID for a retry-safe send. The same id with the same envelope is not stored twice; with a changed envelope it is refused as a conflict",
                 ),
             ),
+            (
+                ("--re",),
+                dict(
+                    default=None,
+                    help="reply to a message you sent, received, or can read in one of your tacs: its full id or at least its first 8 characters (0-9, a-f, -; case is folded). Recipients still come from --to, --tac or --broadcast",
+                ),
+            ),
+            (
+                ("--check",),
+                dict(
+                    action="store_true",
+                    help="send nothing; ask whether this send would be refused now, and by which unread messages. Exit 0 not blocked, 1 check failed, 2 daemon cannot check, 3 would be refused",
+                ),
+            ),
+        ],
+    ),
+    "status": (
+        fn_status,
+        "this node's unread mail: counts, the oldest, and where it blocks a send. Opens and marks nothing. Exit 0 read, 1 query failed, 2 daemon cannot answer",
+        [(("--node",), dict(default=None, help="acting node; falls back to TABC_NODE"))],
+    ),
+    "thread": (
+        fn_thread,
+        "an outline of one thread as this node sees it: time, sender, recipients, subject and id per message, "
+        "replies indented under what they answer. No bodies (tabc open shows one). Lists only messages this node "
+        "sent, received, or can read in a tac it belongs to now. Times are in this machine's time zone. "
+        "Opens and marks nothing. Exit 0 shown, 1 query failed, 2 refused",
+        [
+            (("--node",), dict(default=None, help="acting node; falls back to TABC_NODE")),
+            (("--limit",), dict(type=int, default=THREAD_CLI_LIMIT, help=f"rows per page, 1 to 500 (default {THREAD_CLI_LIMIT})")),
+            (("--after",), dict(default=None, help="continue after this id: the next_after the previous page printed")),
+            (("id",), dict(help="any message in the thread: full id or at least its first 8 characters")),
         ],
     ),
     "who": (fn_who, "who is present, and how much is pending", [(("--node",), dict(default=None, help="acting node; falls back to TABC_NODE"))]),

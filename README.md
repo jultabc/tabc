@@ -43,9 +43,11 @@ agent runs.
 
 See the [changelog](CHANGELOG.md) for release-specific changes and upgrade notes.
 
-> **0.2.4:** `tabc send --id <UUID>` lets a caller reuse a saved message ID
-> when retrying the same request. Normal send checks still apply. See
-> [Upgrading from 0.2.3 to 0.2.4](#upgrading-from-023-to-024).
+> **0.2.5:** replies and threads (`tabc send --re`, `tabc thread`), a check
+> before sending (`tabc send --check`), a read-only view of your unread mail
+> (`tabc status`), one notifier per state directory, and MCP results that mark
+> a definite failure with `isError`. See
+> [Upgrading from 0.2.4 to 0.2.5](#upgrading-from-024-to-025).
 
 It is meant to stay small enough to read. Count it rather than trust a number
 printed here — a baked total is stale by the next commit, which is why this
@@ -429,7 +431,8 @@ configuration. The MCP dependency is optional; the standard CLI install is uncha
 `tabc --help` is the reference. It is generated from the code, so it does not
 go stale the way a table in a README does.
 
-The main ones: `register` `who` `send` `pull` `open` `ack` `tac` `snooze`.
+The main ones: `register` `who` `send` `pull` `open` `ack` `tac` `snooze`
+`status` `thread`.
 
 ## Questions that come up
 
@@ -646,6 +649,73 @@ acting node (from `--node`, or `TABC_NODE`) in the audit. `ls`, `check`, and
 the returned deliveries advance to `INJECTED`, not `READ`. Use `ack` after
 reviewing each message. `search --query <text>` searches names, descriptions,
 subjects, and bodies without changing delivery state.
+
+### Replies and threads
+
+From 0.2.5, a message can answer another one. `--re` takes the id of a message
+you sent, received, or can read in a tac you belong to now: the full id or at
+least its first 8 characters. Recipients still come from `--to`, `--tac` or
+`--broadcast`; a reply does not go to the parent's sender unless you name it.
+
+```bash
+tabc send --sender bob --to alice --re 3fa85f64 --subject "re: plan" --body "agreed"
+tabc open --node alice --id <reply id>   # the reply shows a `re` line: the parent's short id and subject
+tabc thread 3fa85f64 --node alice        # the whole thread as an outline, replies indented
+```
+
+`thread` shows time, sender, recipients, subject and id for each message, and no
+bodies. It marks nothing READ and does not lift a send block. A long thread is
+read one page at a time with `--limit` (default 100, at most 500) and `--after`;
+a page with more after it ends with the command for the next page. A reply whose
+parent you cannot see is marked `(re: not visible)`, and replying does not make
+the parent readable to anyone.
+
+### Before you send
+
+From 0.2.5, `tabc send --check` asks whether a send would be refused now, and by
+which unread messages, without storing anything. It exits 0 not blocked, 1 the
+check failed, 2 the daemon cannot check, 3 the send would be refused. The answer
+holds at that moment only. `tabc status --node <you>` shows your unread mail:
+counts, the oldest unread message of each group, and which unread mail blocks a
+send. It changes nothing. Exit codes for all commands are in the
+[operating guide](GUIDE.md#exit-codes).
+
+### Upgrading from 0.2.4 to 0.2.5
+
+0.2.5 does not change the ledger schema. Nodes, keys, messages, delivery states,
+TACs, routes, and Codex queue receipts are preserved. No conversion or
+registration is required.
+
+After 0.2.5 is published, stop the notifier and `tabd`, confirm the ledger WAL is
+absent or empty, and back up the store and keys. Then install one of these
+packages in the environment that runs your existing installation:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.5"
+# Or, include the optional MCP adapter:
+python -m pip install --upgrade "tabc[mcp]==0.2.5"
+```
+
+Restart `tabd`, then start one `tabus.doorbell` from the same installation.
+Restart any running MCP adapter from its host. Preserve the existing store paths,
+keys, server address, and launch settings.
+
+- `send --check`, `status`, `thread` and `send --re` need the 0.2.5 daemon.
+  Against an older `tabd`, the first three exit 2 and say the daemon is older than
+  the command needs. An older `tabd` does not check a reply target: it does not
+  resolve a short id and stores a full id without the visibility check. Restart
+  `tabd` before using `--re`.
+- Stop the old notifier before starting the new one. A notifier older than 0.2.5
+  takes no lock, so the new one cannot see it.
+- A taken port now stops `tabd` at once with exit 2 and one line.
+- MCP clients receive `isError` on definite failures. `UNKNOWN` (the write may
+  have been applied) and a partial `tabc_open` are not marked; see
+  [MCP.md](MCP.md#errors-and-retries).
+
+Check `tabc --version`, `tabd --version`, and `tabc send --help` (it lists `--re`
+and `--check`) in the target environment.
+
+An upgrade from an older version follows its notes below first.
 
 ### Upgrading from 0.2.3 to 0.2.4
 

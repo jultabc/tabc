@@ -15,15 +15,25 @@ executes this file.
 Auth: every request is signed by the acting node's key (X-Node / X-Node-Ts /
 X-Node-Sig) and verified against that node's registered public key. There is no
 shared secret — see _authorized.
+
+Exit codes (iotzu programming guide 3.4). The server runs until stopped; it has no
+stop file and no signal handler, so SIGTERM and SIGINT end it with the signal
+(rc -15, -2 as a subprocess sees it).
+  1   any other failure, including a failed bind other than the port being taken
+  2   refused to start: the address and port are already in use; starting again gives the same
 """
 
+import errno
 import json
+from http import HTTPStatus
 import os
 import socket
+import sys
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import reply_link
 from . import nodekey  # base58 signature decoding, for verifying /send
 from .send_refusal import declared_length, request_length_refusal
 from . import bus as tabus  # the store; kept under its old name so call sites read the same
@@ -388,6 +398,68 @@ class BusHandler(BaseHTTPRequestHandler):
                 con.close()
             return self._json(200, {"messages": messages})
 
+        if path == "/thread":
+            # 🔴 Read only, like /status: one thread as this node sees it. A message
+            #    the node neither sent nor received is not listed, and an id it cannot
+            #    see is refused with the same code as an id that does not exist.
+            if not self._authorized():
+                return self._json(401, {"error": "token"})
+            # 🔴 Decoded like /tac_lookup: the CLI percent-encodes, and a raw & or #
+            #    in an id cannot become another parameter. One value per key; a
+            #    repeated key is refused rather than one copy silently winning.
+            from urllib.parse import parse_qs
+
+            params = parse_qs(query, keep_blank_values=True)
+            if any(len(v) != 1 for v in params.values()):
+                return self._json(400, {"error": "each parameter once"})
+            node = params.get("node", [""])[0]
+            if not node:
+                return self._json(400, {"error": "node is required"})
+            if node != self._acting():
+                return self._json(403, {"error": "a node may read only its own threads"})
+            con = self._connect()
+            try:
+                rows, refusal = reply_link.thread_view(con, node, params.get("id", [""])[0])
+            finally:
+                con.close()
+            if refusal is not None:
+                self._log_reply_refusal(node, refusal)
+                body = {"error": refusal}
+                body.update(refusal.fields())
+                return self._json(404, body)
+            # Paging (0.2.4.4 second round). 🔴 Without limit the page is
+            #    THREAD_PAGE_MAX rows, not the smaller default: a CLI from the
+            #    first round sends no limit and reads no `more`, so it should get
+            #    as much as one response allows. New clients send their limit.
+            raw_limit = params.get("limit", [None])[0]
+            limit = reply_link.THREAD_PAGE_MAX
+            if raw_limit is not None:
+                # 🔴 ASCII digits only: str.isdigit() is also true for "²" and other
+                #    Unicode digits, and int("²") raises (jack c16061f8).
+                limit = int(raw_limit) if raw_limit.isascii() and raw_limit.isdigit() and len(raw_limit) <= 6 else -1
+            page, meta, refusal = reply_link.thread_page(rows, limit, params.get("after", [None])[0])
+            if refusal is not None:
+                body = {"error": refusal}
+                body.update(refusal.fields())
+                return self._json(400, body)
+            return self._json(200, {"messages": page, **meta, "checked_at": tabus.now_iso()})
+
+        if path == "/status":
+            # 🔴 Read only: no stamp_mailbox_open, no state change. /mailbox records a
+            #    mailbox open, and a status check is not one.
+            if not self._authorized():
+                return self._json(401, {"error": "token"})
+            node = q.get("node")
+            if not node:
+                return self._json(400, {"error": "node is required"})
+            if node != self._acting():
+                return self._json(403, {"error": "a node may read only its own mailbox"})
+            con = self._connect()
+            st = tabus.bus_inbox_status(con, node)
+            con.close()
+            st["checked_at"] = tabus.now_iso()
+            return self._json(200, st)
+
         if path == "/mailbox":
             if not self._authorized():
                 return self._json(401, {"error": "token"})
@@ -606,7 +678,7 @@ class BusHandler(BaseHTTPRequestHandler):
         if path in ("/register", "/beat", "/snooze", "/reopen", "/ack"):
             if data.get("node", "") != self._acting():
                 return self._json(403, {"error": "a node may act only on its own node"})
-        elif path == "/send":
+        elif path in ("/send", "/send_check"):
             if data.get("from", "") != self._acting():
                 return self._json(403, {"error": "a node may send only as itself"})
         if (
@@ -748,6 +820,7 @@ class BusHandler(BaseHTTPRequestHandler):
             )
             if mid is None:
                 con.close()
+                self._log_reply_refusal(data.get("from", ""), info)
                 # 🔴 `error` stays the sentence older clients read. A coded refusal adds
                 #    code, message, details and retry next to it; the status stays 400.
                 refused = {"error": info}
@@ -760,6 +833,38 @@ class BusHandler(BaseHTTPRequestHandler):
             }
             con.close()
             return self._json(200, {"id": mid, "info": info, "pending": pending})
+
+        elif path == "/send_check":
+            # 🔴 A separate path, not a flag on /send: a daemon that predates it answers
+            #    404 and sends nothing, where an unknown field on /send would be dropped
+            #    and the message really sent.
+            #    The same bus_send runs with check_only and returns before any write.
+            mid, info = tabus.bus_send(
+                con,
+                data.get("from", ""),
+                data.get("to", []),
+                data.get("subject", ""),
+                data.get("body"),
+                data.get("priority", "next"),
+                data.get("expires_at"),
+                data.get("reply_to"),
+                data.get("message_id"),
+                data.get("thread_id"),
+                data.get("tac"),
+                bool(data.get("broadcast")),
+                check_only=True,
+            )
+            con.close()
+            if mid is None:
+                self._log_reply_refusal(data.get("from", ""), info)
+                refused = {"error": info, "would_send": False}
+                if hasattr(info, "fields"):
+                    refused.update(info.fields())
+                return self._json(200, refused)
+            return self._json(
+                200,
+                {"would_send": True, "recipients": info["recipients"], "checked_at": tabus.now_iso()},
+            )
 
         elif path == "/reopen":
             # 🔴 Accept an id prefix. Mailbox listings show a truncated id, and opening
@@ -775,6 +880,9 @@ class BusHandler(BaseHTTPRequestHandler):
             #    When it grew the third value this caller was not updated, and
             #    dict(rows[0]) blew up here.
             out, quarantined, _lost = tabus.reopen_unread(con, node, full_id)
+            # The parent shown above a reply: its subject only when this node can
+            # see the parent, its id alone otherwise.
+            parent = reply_link.parent_of(con, node, full_id)
             con.close()
             for q in quarantined:
                 pass  # quarantined rows are not mixed into the response; the first
@@ -790,6 +898,7 @@ class BusHandler(BaseHTTPRequestHandler):
                     "state": r0["state"],
                     "from": r0["sender_id"],
                     "body": r0["body"],
+                    "reply_to": parent,
                 },
             )
 
@@ -896,6 +1005,31 @@ class BusHandler(BaseHTTPRequestHandler):
         body.update(msg.fields())
         return self._json(400, body)
 
+    def _log_reply_refusal(self, node, refusal):
+        # 🔴 The only place "no such message" and "a message this node cannot see"
+        #    are told apart. The response carries one code for both. The target
+        #    passed the shape check (id characters only) and is written with repr,
+        #    so a caller cannot add a line to this log.
+        internal = getattr(refusal, "internal", None)
+        if internal:
+            print(
+                f"[tabd] reply target unavailable node={node} "
+                f"target={refusal.details.get('target')!r} reason={internal}",
+                flush=True,
+            )
+
+    def log_request(self, code="-", size="-"):  # noqa: N802
+        # 🔴 /thread takes id, limit and after from the query, and a refused value
+        #    must not come back in a log line any more than in the response (hu
+        #    34b8e754). The access line keeps the method, path and status and drops
+        #    the query. Other endpoints log as before.
+        line = getattr(self, "requestline", "")
+        if (getattr(self, "path", "") or "").split("?", 1)[0] == "/thread":
+            line = f"{getattr(self, 'command', '-')} /thread?<query not logged> {getattr(self, 'request_version', '-')}"
+        if isinstance(code, HTTPStatus):
+            code = code.value
+        self.log_message('"%s" %s %s', line, str(code), str(size))
+
     def log_message(self, fmt, *args):  # noqa: N802
         print(f"[tabd] {self.address_string()} {fmt % args}", flush=True)
 
@@ -934,6 +1068,9 @@ def init_extras() -> None:
     con.close()
 
 
+EXIT_PORT_IN_USE = 2
+
+
 def main():
     """Console entry point; see the note in tabus.cli.main."""
     import argparse
@@ -954,14 +1091,27 @@ def main():
         help="LAN address, to accept remote clients. Every request is signed regardless.",
     )
     a = ap.parse_args()
-    init_extras()
     # 🔴 The socket is taken here, and the line below is printed after that. Printed
     #    before, it announced an intention: a bind that then failed left a log saying the
     #    daemon was listening when it never did, and anything reading that line as a
     #    readiness signal would be reading it from a process that does not hold the port.
     #    The port comes from the socket rather than from the argument, so it is the port
     #    actually bound.
-    server = ThreadingHTTPServer((a.bind, a.port), BusHandler)
+    try:
+        server = ThreadingHTTPServer((a.bind, a.port), BusHandler)
+    except OSError as e:
+        if e.errno != errno.EADDRINUSE:
+            raise
+        print(f"[tabd] {a.bind}:{a.port} is already in use — not started", flush=True)
+        sys.exit(EXIT_PORT_IN_USE)
+    # 🔴 The ledger is prepared only once the port is held: a second tabd refused for
+    #    a taken port must leave the store as it was (coco 6512cfad). If preparing it
+    #    fails, the socket is closed before the error goes out.
+    try:
+        init_extras()
+    except BaseException:
+        server.server_close()
+        raise
     print(READY_LINE.format(bind=a.bind, port=server.server_address[1]), flush=True)
     server.serve_forever()
 
