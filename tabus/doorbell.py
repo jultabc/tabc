@@ -41,8 +41,26 @@ Running it
     DOORBELL_MODE=LIVE python3 -m tabus.doorbell
     DOORBELL_POLL_SEC=2  (default)
     DOORBELL_MODE=SHADOW records what would have rung, and injects nothing
+
+One per state directory
+-----------------------
+At start it takes an exclusive flock on <state dir>/lock-doorbell (TABC_HOME, by
+default ~/.tabc) and holds it until the process ends; the kernel releases it on
+any exit. A second doorbell on the same state directory exits 75 without reading,
+ringing or recording anything. Two doorbells ringing the same mail would each
+deliver before either records (decide, deliver, record_ring).
+Limits: a doorbell older than 0.2.5 takes no lock, so it neither blocks nor is
+blocked; stop it before starting a new one. Two doorbells with different TABC_HOME
+but the same ledger or store are not blocked by this lock.
+
+Exit codes:
+  0   stopped by SIGTERM or SIGINT after finishing the round
+  1   any other failure
+  2   refused to start: DOORBELL_MODE is not SHADOW or LIVE; starting again gives the same
+  75  another doorbell holds this state directory's lock
 """
 
+import fcntl
 import os
 import signal
 import subprocess
@@ -389,6 +407,34 @@ def deliver_doorbell(node_id, unread, notification_id=None):
 
 _stop = False
 
+EXIT_BAD_MODE = 2
+EXIT_BUSY = 75
+LOCK_NAME = "lock-doorbell"
+_lock_fd = None  # held for the life of the process; the kernel drops the lock on exit
+
+
+def acquire_lock(home=None):
+    """Take this state directory's doorbell lock. (fd, None) on success, (None, holder) if held.
+
+    🔴 The file is opened without truncation and written only after the lock is held,
+       so a refused start never erases the holder's PID. The descriptor is not
+       inheritable (os.open default), so no child process keeps the lock alive.
+    """
+    path = os.path.join(home or paths.home(), LOCK_NAME)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        try:
+            holder = os.pread(fd, 32, 0).decode("ascii", "replace").strip()
+        except OSError:
+            holder = ""
+        os.close(fd)
+        return None, holder
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, f"{os.getpid()}\n".encode("ascii"), 0)
+    return fd, None
+
 
 def _on_signal(signum, _frame):
     global _stop
@@ -440,10 +486,21 @@ def _record_start(mode):
 
 
 def main():
+    global _lock_fd
     interval = float(os.environ.get("DOORBELL_POLL_SEC", "2"))
     mode = os.environ.get("DOORBELL_MODE", "SHADOW").strip().upper()
     if mode not in ("SHADOW", "LIVE"):
-        raise ValueError(f"unknown doorbell mode: {mode} (SHADOW or LIVE)")
+        print(f"  {_kst()} [doorbell] unknown mode: {mode} (SHADOW or LIVE) — not started", flush=True)
+        sys.exit(EXIT_BAD_MODE)
+    # 🔴 The lock comes before anything is read, rung or recorded.
+    _lock_fd, holder = acquire_lock()
+    if _lock_fd is None:
+        print(
+            f"  {_kst()} [doorbell] already running for {paths.home()} (pid {holder or 'unknown'})"
+            " — not started",
+            flush=True,
+        )
+        sys.exit(EXIT_BUSY)
 
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)

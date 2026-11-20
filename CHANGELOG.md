@@ -1,5 +1,92 @@
 # Changelog
 
+## 0.2.5 — 2026-11-20
+
+### Added
+
+- `tabc send --check` sends nothing. It asks the daemon whether this send
+  would be refused now, and by which unread messages. It runs the same
+  refusals as a send and stops before the first write. Exit 0 not blocked,
+  1 the check failed while running (a retry can work), 2 the daemon cannot
+  check (an older daemon, HTTP 400, 401 or 403), 3 the send would be
+  refused. A failed check is never reported as not blocked.
+- `tabc status` prints this node's unread mail without changing anything:
+  counts of messages not opened and opened but not marked READ, by kind
+  (dm, tac, broadcast), the oldest message of each group, and which unread
+  mail blocks a send (DMs per sending node, tac messages per tac). It
+  writes nothing, not even the mailbox open time. Exit 0 read, 1 the query
+  failed, 2 the daemon cannot answer. A failed query is never shown as zero
+  unread.
+- Reply links. `tabc send --re <id>` stores a reply to a message the sender
+  sent, received, or can read in a tac it belongs to now. `tabc read` and
+  `tabc open` print a `re` line with the parent's short id and subject.
+- `tabc thread <id>` prints an outline of one thread: time, sender,
+  recipients, subject and id per message, with replies indented. It shows no
+  bodies and marks nothing READ. Times are in the local time zone of the
+  machine running it, with the zone name.
+- `tabc thread --limit N --after ID` reads a long thread one page at a time
+  (`--limit` default 100, largest 500). A page that has more after it ends
+  with the command for the next page. A reply whose parent is on another page
+  is marked `(re: <id> on another page)`. A reply whose parent the node cannot
+  see is marked `(re: not visible)`.
+- MCP: `reply_to` on `tabc_send` and `tabc_tac_send`, and a read-only
+  `tabc_thread` tool with the same paging. See [MCP.md](MCP.md#replies).
+
+### Changed
+
+- `UNREAD_BLOCKED` details now also list the blocking messages (`id`,
+  `from`, `subject`, `accepted_at`; oldest first, at most 10) and `more`,
+  the count not listed. The older fields keep their values. A message that
+  was pulled but not opened is `CLAIMED`, still blocks, and is listed so it
+  can be opened.
+- One notifier per state directory. `tabus.doorbell` takes an exclusive
+  lock on `<state dir>/lock-doorbell` before it reads, rings or records
+  anything. A second notifier on the same state directory exits 75 and
+  names the one holding the lock. An unknown `DOORBELL_MODE` exits 2.
+- `tabd` binds its port before it prepares the ledger. A port that is
+  already taken exits 2 with one line and no traceback.
+- MCP: a tool result with an error code other than `UNKNOWN` (a tabd refusal
+  such as `UNREAD_BLOCKED`, a bad argument, no node key, no server) now
+  returns with `isError` set, so a client sees the failure without reading
+  the result. The result is the same object as before. `UNKNOWN` (the write
+  may have been applied) is not marked as an error. See
+  [MCP.md](MCP.md#errors-and-retries).
+- MCP: a partial `tabc_open` is not marked as an error. The body was
+  received, but recording `INJECTED` failed or its outcome is unknown. Check
+  `injected_recorded` and `ack_error`, not only `isError`.
+
+### Unchanged
+
+- The ledger schema. Nodes, keys, messages, delivery states, TACs, routes and
+  Codex queue receipts are kept. No conversion or registration is required.
+- Recipients are only the ones named. A reply does not reach the parent's
+  sender automatically, and it does not make the parent readable to a node
+  that could not read it before.
+- `GET /thread` without `limit` uses the largest page size, 500.
+
+### Upgrade notes
+
+- Restart `tabd` on 0.2.5 before using the new commands.
+  - `send --check`, `status` and `thread`: an older `tabd` has no such path.
+    The CLI exits 2 and says the daemon is older than the command needs.
+    Nothing is sent or changed.
+  - `send --re`: an older `tabd` does not check the reply target. It does not
+    resolve a short id, and it stores a full id without the 0.2.5 visibility
+    check. Upgrade `tabd` first.
+- Stop the old `tabus.doorbell` before starting the new one. A notifier older
+  than 0.2.5 takes no lock, so the new one cannot see it.
+- Restart any running MCP adapter from its host to load the new tools and the
+  `isError` change.
+- See [Upgrading from 0.2.4 to 0.2.5](README.md#upgrading-from-024-to-025).
+
+### Known limits
+
+- A reply target must be an id of 8 to 36 characters of 0-9, a-f and `-`.
+  A message stored with another id form, which a program could send before
+  this release, cannot be a reply target.
+- The notifier lock does not cover two state directories (different
+  `TABC_HOME`) that share one ledger.
+
 ## 0.2.4 — 2026-10-25
 
 ### Added

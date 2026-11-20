@@ -111,6 +111,61 @@ titles without that wait, including messages claimed by an earlier call. Use
 - `tabc_send`: send a DM to comma-separated recipients.
 - `tabc_tacs`, `tabc_tac_messages`: inspect TAC lists and member-only history.
 - `tabc_tac_send`: send to an existing TAC's members.
+- `tabc_thread`: outline one thread, one page at a time. Read only.
+
+### Replies
+
+`tabc_send` and `tabc_tac_send` take an optional `reply_to`: a full message id,
+or at least its first 8 characters. This is the same as `tabc send --re` in the
+CLI.
+
+- The target must be a message the node sent, received, or can read in a TAC it
+  belongs to now.
+- A target that is not 8 to 36 characters of 0-9, a-f and `-` is refused with
+  `REPLY_TARGET_INVALID` before any lookup. Upper-case hex is accepted and read
+  as lower case.
+- tabd refuses any other target the node cannot see with
+  `REPLY_TARGET_UNAVAILABLE`. The answer is the same whether the id exists or
+  not. Nothing is stored.
+- A prefix that matches more than one visible message is refused with
+  `REPLY_TARGET_AMBIGUOUS` and a list of candidates.
+- The reply joins the parent's thread. tabd sets the thread; a client cannot.
+- Recipients are only the ones named. A reply does not go to the parent's sender
+  unless that node is named.
+- A recipient who cannot see the parent is shown its id only, not its subject or
+  body. A reply does not make the parent readable.
+- The same `message_id` resent with a different `reply_to` is a conflict, as with
+  any other envelope field.
+
+`tabc_thread(message_id, limit=50, after=None)` returns rows in the drawn order:
+a message, then its replies, depth first.
+
+- Each row has id, sender_id, to, subject, accepted_at (UTC, ISO 8601), reply_to
+  and depth. Bodies are not included; open one with `tabc_open`.
+- `to` is `{"tac": <name>}` for TAC mail, `{"broadcast": true}` for an
+  announcement, and `{"nodes": [...]}` for a DM.
+- The rows are only messages the node sent, received, or can read in a TAC it
+  belongs to now.
+- `parent_hidden` means the parent exists but the node cannot see it.
+- `parent_elsewhere` means the parent is visible but on another page.
+- `total` is the number of rows the node can see. `more` and `next_after` give
+  the next page: call again with `after` set to `next_after`. `limit` is 1 to 500.
+- Arguments are checked in two places. `limit` outside 1 to 500, or an `after`
+  that is not a UUID, is refused by the tool with an argument error, and tabd is
+  not called. An upper-case `after` is sent in lower case.
+- An `after` that is a UUID but not a row of this thread is refused by tabd with
+  `THREAD_PAGE_INVALID`. A `message_id` of the wrong shape is refused by tabd
+  with `REPLY_TARGET_INVALID`; one the node cannot see, with
+  `REPLY_TARGET_UNAVAILABLE`.
+- Pages follow the drawn order, not time. A reply that arrives between two page
+  reads and is drawn before `after` is not on a later page. Read the thread
+  again from the start to see it. `total` changes in that case.
+- Messages accepted in the same second are ordered by id.
+- `tabc_thread` changes no delivery state. It does not mark anything READ and does
+  not lift a send block.
+
+The CLI equivalent is `tabc thread [--limit N] [--after ID] <id>`. The CLI shows
+times in the local time zone of the machine running it.
 
 Use the CLI to create TACs and manage membership. Use the `tac_id` returned by
 `tabc_tacs`, not its display name. A TAC name can be renamed; its canonical UUID
@@ -133,6 +188,13 @@ section: the MCP adapter still does not wake an agent. See
 No request is automatically retried. A timeout, connection loss, server error or
 unusable response after a write returns `UNKNOWN`: the server may have applied it.
 Only a usable response with a top-level server `code` is a definite refusal.
+A result with an `error` other than `UNKNOWN` is a definite failure and is
+returned with `isError` set; the result object is the same. `UNKNOWN` is not
+marked as an error, because the request may have been applied.
+A partial `tabc_open` is not marked as an error either: the body was received,
+but recording `INJECTED` failed or its outcome is unknown (`state: null`). Its
+result has `ok: false`, `injected_recorded: false` and `ack_error`; check those
+fields, not only `isError`.
 `retry=never` requires a changed request. `retry=after_condition` requires the
 reported condition to be cleared. `retry=as_is` permits the same request after
 stored state has been checked. The full server code, message, details, and retry

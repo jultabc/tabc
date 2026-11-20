@@ -50,6 +50,12 @@ tells you which layer to look at.
 problem. Everyone missing them at once is the notifier, and no amount of
 re-registering will help.
 
+From 0.2.5, one notifier runs per state directory. `tabus.doorbell` takes a lock
+on `<state dir>/lock-doorbell`; a second one on the same state directory exits 75
+and names the holder. A notifier older than 0.2.5 takes no lock, so stop it
+before starting a new one. Two state directories (different `TABC_HOME`) that
+share a ledger are not covered by the lock.
+
 For the single-node case, two queries answer it:
 
 ```bash
@@ -197,6 +203,31 @@ Two related traps:
 surprises you, run it under `set -x` and read the real `argv` before suspecting
 the tool.
 
+### Exit codes
+
+`tabc` uses the same exit codes for every command:
+
+| Exit | Meaning |
+|---|---|
+| 0 | done |
+| 1 | the request failed or was refused: connection, server error, a refused send or ack. A retry can give a different result |
+| 2 | refused to start: missing or invalid input or node identity, a usage error, a daemon older than the command needs, or HTTP 400, 401 or 403. Repeating gives the same result |
+| 3 | `send --check` only: the send would be refused |
+
+From 0.2.5, check a send before making it and read your own unread mail
+without changing anything:
+
+```bash
+tabc send --check --sender alice --to bob --subject s --body b   # 0 not blocked, 3 would be refused
+tabc status --node alice                                         # counts, oldest unread, what blocks a send
+```
+
+`send --check` runs the same refusals as a send and stores nothing. Its answer
+is true at that moment only; the send itself can still be refused. A check that
+could not run exits 1 or 2 and is never reported as not blocked. `status` writes
+nothing, not even the mailbox open time; a failed query is never shown as zero
+unread.
+
 ---
 
 ## Delivery states, and what each one settles
@@ -268,7 +299,11 @@ tabd returns a stable `code`, a plain `message`, structured `details`, and a
 | `REQUEST_TOO_LARGE` | HTTP request body exceeds 524,288 bytes |
 | `REQUEST_TIMEOUT` | the declared request body did not arrive within 30 seconds |
 | `REQUEST_INCOMPLETE` | the connection ended before the declared body length arrived |
-| `UNREAD_BLOCKED` | read-before-send is blocking this DM or TAC send |
+| `UNREAD_BLOCKED` | read-before-send is blocking this DM or TAC send. From 0.2.5, `details.messages` lists the blocking messages (`id`, `from`, `subject`, `accepted_at`; oldest first, at most 10) and `details.more` counts the rest |
+| `REPLY_TARGET_INVALID` | from 0.2.5: the reply target is not 8 to 36 characters of 0-9, a-f and `-` |
+| `REPLY_TARGET_UNAVAILABLE` | from 0.2.5: the node cannot see the reply target, or it does not exist (the answer is the same) |
+| `REPLY_TARGET_AMBIGUOUS` | from 0.2.5: the short id matches more than one visible message; the candidates are listed |
+| `THREAD_PAGE_INVALID` | from 0.2.5: `after` is a UUID but not a row of this thread |
 | `TAC_ID_INVALID` | a TAC operation requires a canonical lowercase UUID; the server does not resolve names |
 | `TAC_NOT_FOUND` | no TAC matches the supplied identifier |
 | `TAC_NAME_TAKEN` | the folded name or a reserved legacy identifier is already used |
