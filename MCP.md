@@ -94,7 +94,8 @@ the stored message; it does not confirm that the recipient has read it.
 On the receiving agent:
 
 1. Call `tabc_pull`. It claims new deliveries and returns bodies.
-2. Call `tabc_open` with the full message UUID. It records `INJECTED`.
+2. Call `tabc_open` with the full message UUID. It records `INJECTED`. A message
+   already `READ` or `PROCESSED` is shown again and keeps its state.
 3. Call `tabc_ack` with state `READ` after reviewing the message.
 4. Record `PROCESSED` only after processing it. This records an outcome, not its correctness.
 

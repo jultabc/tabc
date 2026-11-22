@@ -1055,6 +1055,40 @@ def claim_new(con, node, limit=10, priority=None, lease_sec=None, claimed_by=Non
     return out, quarantined, lost_claim
 
 
+SETTLED_STATES = ("READ", "PROCESSED")
+
+
+def open_settled(con, node, message_id):
+    """Show a message this node already marked READ or PROCESSED. Changes nothing.
+
+    `open` used to answer "no such delivery" for these, because reopen_unread
+    selects unread states only. The id was right; the message was read. People
+    took the answer to mean the id was wrong, and kept the output of `read` in
+    files to see a body again.
+
+    Read only: no state moves, no row is written. The envelope was checked when
+    the message was first opened, so this does not check it again; a body whose
+    hash no longer matches is still refused, because showing a tampered body is
+    worse than showing nothing.
+
+    Returns (row or None, state or None). state is the delivery's state whatever
+    it is, so the caller can say why nothing was shown (DEAD, QUARANTINED).
+    """
+    row = con.execute(
+        """SELECT d.state, m.id, m.sender_id, m.subject, m.body, m.body_hash
+             FROM deliveries d JOIN messages m ON m.id = d.message_id
+            WHERE d.recipient_id=? AND m.id=?""",
+        (node, message_id),
+    ).fetchone()
+    if row is None:
+        return None, None
+    if row["state"] not in SETTLED_STATES:
+        return None, row["state"]
+    if hashlib.sha256(row["body"].encode()).hexdigest() != row["body_hash"]:
+        return None, "TAMPERED"
+    return dict(row), row["state"]
+
+
 def reopen_unread(
     con, node, message_id=None, limit=10, lease_sec=None, claimed_by=None
 ):

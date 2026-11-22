@@ -879,6 +879,13 @@ class BusHandler(BaseHTTPRequestHandler):
             #    When it grew the third value this caller was not updated, and
             #    dict(rows[0]) blew up here.
             out, quarantined, _lost = tabus.reopen_unread(con, node, full_id)
+            settled_state = None
+            if not out:
+                # 🔴 Already READ or PROCESSED: show it, change nothing. This used to
+                #    answer "no such delivery", which reads as a wrong id.
+                settled, settled_state = tabus.open_settled(con, node, full_id)
+                if settled:
+                    out = [settled]
             # The parent shown above a reply: its subject only when this node can
             # see the parent, its id alone otherwise.
             parent = reply_link.parent_of(con, node, full_id)
@@ -887,6 +894,16 @@ class BusHandler(BaseHTTPRequestHandler):
                 pass  # quarantined rows are not mixed into the response; the first
                 # valid row is what goes out, keeping the existing contract
             if not out:
+                if settled_state:
+                    # The id is right; the delivery is in a state that has no body to
+                    # show (DEAD, QUARANTINED, a body that no longer matches its hash).
+                    return self._json(
+                        409,
+                        {
+                            "error": f"message {full_id[:8]} is {settled_state} and cannot be opened",
+                            "state": settled_state,
+                        },
+                    )
                 return self._json(404, {"error": "no such delivery"})
             r0 = dict(out[0])
             return self._json(

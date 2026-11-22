@@ -300,7 +300,7 @@ tabc send --sender alice --to bob \
 
 # Receive
 tabc pull --node bob            # fetch new messages
-tabc open --node bob --id <id>  # read one
+tabc open --node bob --id <id>  # read one (a message already READ shows again, unchanged)
 tabc ack  --node bob --id <id> --state READ
 ```
 
