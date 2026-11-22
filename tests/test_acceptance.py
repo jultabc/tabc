@@ -217,6 +217,109 @@ def main():
         ids_after = [u["message_id"] for u in r7.get("unread", [])]
         check("S6 excluded from the list after READ", c6 == 200 and mid not in ids_after)
 
+        # S6b open on a READ message shows it again and changes nothing. It used to
+        #     answer 404 "no such delivery", which reads as a wrong id.
+        con = sqlite3.connect(dbpath)
+        st_before = con.execute(
+            "SELECT state, updated_at FROM deliveries WHERE message_id=? AND recipient_id='n2'",
+            (mid,),
+        ).fetchone()
+        c6r, r6r = call("POST", "/reopen", {"node": "n2", "message_id": mid[:8]})
+        st_after = con.execute(
+            "SELECT state, updated_at FROM deliveries WHERE message_id=? AND recipient_id='n2'",
+            (mid,),
+        ).fetchone()
+        check(
+            "S6b reopen of a READ message returns its body and state READ",
+            c6r == 200 and r6r.get("body") == body_before and r6r.get("state") == "READ",
+            f"{c6r} {r6r}",
+        )
+        check("S6b reopen of a READ message changes nothing", st_before == st_after, f"{st_before} {st_after}")
+
+        # S6c the CLI shows it, says it is already read, exits 0, and leaves it READ.
+        open_run = subprocess.run(
+            [sys.executable, "-m", "tabus.cli", "open", "--node", "n2", "--id", mid[:8]],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        st_cli = con.execute(
+            "SELECT state, updated_at FROM deliveries WHERE message_id=? AND recipient_id='n2'",
+            (mid,),
+        ).fetchone()
+        check(
+            "S6c tabc open on a READ message prints the body and exits 0",
+            open_run.returncode == 0
+            and body_before in open_run.stdout
+            and "already read" in open_run.stdout,
+            open_run.stdout[-300:] + open_run.stderr[-300:],
+        )
+        check("S6c tabc open leaves a READ message as it was", st_cli == st_before, f"{st_cli}")
+
+        # S6d a DEAD delivery is named as DEAD (409), not "no such delivery" (404).
+        c6s, r6s = call(
+            "POST", "/send", {"from": "n1", "to": ["n2"], "subject": "dead", "body": "d"}
+        )
+        dead_id = r6s.get("message_id") or r6s.get("id")
+        con.execute(
+            "UPDATE deliveries SET state='DEAD' WHERE message_id=? AND recipient_id='n2'",
+            (dead_id,),
+        )
+        con.commit()
+        c6d, r6d = call("POST", "/reopen", {"node": "n2", "message_id": dead_id})
+        check(
+            "S6d reopen of a DEAD delivery answers 409 with state DEAD",
+            c6s == 200 and c6d == 409 and r6d.get("state") == "DEAD" and "DEAD" in r6d.get("error", ""),
+            f"{c6s} {r6s} {c6d} {r6d}",
+        )
+        c6u, r6u = call(
+            "POST", "/reopen", {"node": "n2", "message_id": "99999999-9999-4999-8999-999999999999"}
+        )
+        check("S6e an unknown id still answers 404", c6u == 404, f"{c6u} {r6u}")
+
+        # S6f a body that fails its envelope check: the first open quarantines it and
+        #     must answer, not drop the connection (it used to raise KeyError on
+        #     sender_id). Both opens answer 409 with state QUARANTINED.
+        c6q, r6q = call(
+            "POST", "/send", {"from": "n1", "to": ["n2"], "subject": "tamper", "body": "original"}
+        )
+        tq = r6q.get("message_id") or r6q.get("id")
+        con.execute("UPDATE messages SET body='changed' WHERE id=?", (tq,))
+        con.commit()
+        try:
+            f1 = call("POST", "/reopen", {"node": "n2", "message_id": tq})
+        except Exception as e:  # the old failure: no answer at all
+            f1 = (None, {"exception": repr(e)})
+        st_q = con.execute(
+            "SELECT state FROM deliveries WHERE message_id=? AND recipient_id='n2'", (tq,)
+        ).fetchone()[0]
+        check(
+            "S6f first open of a tampered body answers 409 quarantined",
+            f1[0] == 409
+            and f1[1].get("state") == "QUARANTINED"
+            and bool(f1[1].get("quarantined"))
+            and st_q == "QUARANTINED",
+            f"{f1} {st_q}",
+        )
+        f2 = call("POST", "/reopen", {"node": "n2", "message_id": tq})
+        check(
+            "S6f second open answers 409 QUARANTINED",
+            f2[0] == 409 and f2[1].get("state") == "QUARANTINED",
+            f"{f2}",
+        )
+        q_run = subprocess.run(
+            [sys.executable, "-m", "tabus.cli", "open", "--node", "n2", "--id", tq[:8]],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        check(
+            "S6f tabc open on it exits 1 and names the state",
+            q_run.returncode == 1 and "QUARANTINED" in q_run.stdout and "original" not in q_run.stdout,
+            q_run.stdout[-300:] + q_run.stderr[-300:],
+        )
+        con.close()
+
         # S8 verify execution in a process; calling functions alone was insufficient.
         #    🔴 The package uses relative imports, so a module launches as `-m tabus.x`, not
         #    as a file path — and the subprocess reaches the package through PYTHONPATH.

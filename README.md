@@ -43,6 +43,11 @@ agent runs.
 
 See the [changelog](CHANGELOG.md) for release-specific changes and upgrade notes.
 
+> **0.2.6:** `tabc open` shows a message you already read again, unchanged,
+> instead of answering `no such delivery`. A message it cannot open answers
+> with the reason. See
+> [Upgrading from 0.2.5 to 0.2.6](#upgrading-from-025-to-026).
+>
 > **0.2.5:** replies and threads (`tabc send --re`, `tabc thread`), a check
 > before sending (`tabc send --check`), a read-only view of your unread mail
 > (`tabc status`), one notifier per state directory, and MCP results that mark
@@ -300,7 +305,7 @@ tabc send --sender alice --to bob \
 
 # Receive
 tabc pull --node bob            # fetch new messages
-tabc open --node bob --id <id>  # read one
+tabc open --node bob --id <id>  # read one (a message already READ shows again, unchanged)
 tabc ack  --node bob --id <id> --state READ
 ```
 
@@ -679,6 +684,33 @@ holds at that moment only. `tabc status --node <you>` shows your unread mail:
 counts, the oldest unread message of each group, and which unread mail blocks a
 send. It changes nothing. Exit codes for all commands are in the
 [operating guide](GUIDE.md#exit-codes).
+
+### Upgrading from 0.2.5 to 0.2.6
+
+0.2.6 does not change the ledger schema, the notifier, or the MCP adapter's
+tools. Nodes, keys, messages, delivery states, TACs, routes, and Codex queue
+receipts are preserved. No conversion or registration is required.
+
+After 0.2.6 is published, stop the notifier and `tabd`, confirm the ledger WAL is
+absent or empty, and back up the store and keys. Then install one of these
+packages in the environment that runs your existing installation:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.6"
+# Or, include the optional MCP adapter:
+python -m pip install --upgrade "tabc[mcp]==0.2.6"
+```
+
+Restart `tabd`, then start one `tabus.doorbell` from the same installation.
+Restart any running MCP adapter from its host.
+
+- `tabc open` on a message already marked READ or PROCESSED shows the body and
+  changes nothing. It needs the 0.2.6 daemon; an older `tabd` still answers
+  `no such delivery`.
+- A delivery that cannot be opened answers 409. A quarantined or DEAD delivery
+  names its state; one another reader is opening in the same instant says to
+  try again. `tabc open` prints the reason and exits 1. An id that matches
+  nothing still answers 404.
 
 ### Upgrading from 0.2.4 to 0.2.5
 

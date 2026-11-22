@@ -916,11 +916,10 @@ def fn_open(a):
         node=a.node,
     )
     if code != 200:
-        print("failed:", r)
+        # 409 names the state (quarantined, DEAD, opened by another reader);
+        # 404 means the id matched nothing in this mailbox.
+        print("failed:", r.get("error") or r)
         sys.exit(1)
-    if r.get("quarantined"):
-        print(f"quarantined — the body was not opened ({r['quarantined']})")
-        return
     print(
         f"\n{'='*60}\nid      {r['id']}\nfrom    {r.get('sender_id') or r.get('from')}"
     )
@@ -931,6 +930,10 @@ def fn_open(a):
     print("=" * 60)
     if r.get("state") == "INJECTED":
         print("(reopened — not marked read)")
+    if r.get("state") in ("READ", "PROCESSED"):
+        # Already read: shown again, state unchanged. Nothing to acknowledge.
+        print(f"(already {r['state'].lower()} — state unchanged)")
+        return
     # Record arrival: the body was opened, so this advances to INJECTED.
     # 🔴 Acknowledge with the full id the server resolved, not the prefix that was
     #    typed. If another message sharing that prefix arrives in between, resolving
@@ -999,10 +1002,12 @@ def fn_read(a):
             node=a.node,
         )
         if oc != 200:
-            print(f"  ⚠ {mid[:18]}… could not open — left unread ({orr.get('error') or orr})")
+            # A quarantined message answers 409 with its reason; it is not opened.
+            print(f"  ⚠ {mid[:18]}… could not open ({orr.get('error') or orr})")
             continue
-        if orr.get("quarantined"):
-            print(f"  ⚠ {mid[:18]}… quarantined — body not opened, left unread ({orr['quarantined']})")
+        if orr.get("state") in ("READ", "PROCESSED"):
+            # Marked read elsewhere after the listing above. Already read: skip it.
+            print(f"  {mid[:18]}… already marked read elsewhere — skipped")
             continue
         opened_id = orr.get("id", mid)
         print(
@@ -1605,7 +1610,7 @@ COMMANDS = {
     ),
     "open": (
         fn_open,
-        "open one: shows the body and records arrival. State never moves backwards",
+        "open one: shows the body and records arrival. A message already marked READ or PROCESSED is shown again and left as it is. State never moves backwards",
         [(("--node",), dict(required=True)), (("--id",), dict(required=True))],
     ),
     "ack": (

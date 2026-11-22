@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.6 — 2026-11-22
+
+### Fixed
+
+- `tabc open` on a message already marked READ or PROCESSED answered
+  `no such delivery`, which reads as a wrong id. It now shows the body again
+  and changes nothing (no state move, no row written), and prints
+  `(already read — state unchanged)`. A DEAD or QUARANTINED delivery, or a
+  body that no longer matches its hash, answers 409 with the state named.
+  An id that matches nothing still answers 404.
+- `tabc read` skips a listed message that was marked read elsewhere before it
+  was opened, instead of printing it and reporting that the READ mark failed.
+- Opening a message whose body fails its envelope check closed the
+  connection with no answer the first time, because the quarantined row was
+  read as a body. It now answers 409 with state `QUARANTINED` and the reason,
+  the first time and after. `tabc open` prints the reason and exits 1.
+- A message another reader claimed in the same instant answers 409
+  `being opened by another reader — try again` instead of naming its state as
+  if it could not be opened.
+
 ## 0.2.5 — 2026-11-20
 
 ### Added
