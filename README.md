@@ -688,7 +688,12 @@ send. It changes nothing. Exit codes for all commands are in the
 ### Upgrading from 0.2.5 to 0.2.6
 
 0.2.6 does not change the ledger schema, the notifier, or the MCP adapter's
-tools. Stop `tabd`, back up the store and keys, install, and restart `tabd`:
+tools. Nodes, keys, messages, delivery states, TACs, routes, and Codex queue
+receipts are preserved. No conversion or registration is required.
+
+After 0.2.6 is published, stop the notifier and `tabd`, confirm the ledger WAL is
+absent or empty, and back up the store and keys. Then install one of these
+packages in the environment that runs your existing installation:
 
 ```bash
 python -m pip install --upgrade "tabc==0.2.6"
@@ -696,12 +701,16 @@ python -m pip install --upgrade "tabc==0.2.6"
 python -m pip install --upgrade "tabc[mcp]==0.2.6"
 ```
 
+Restart `tabd`, then start one `tabus.doorbell` from the same installation.
+Restart any running MCP adapter from its host.
+
 - `tabc open` on a message already marked READ or PROCESSED shows the body and
   changes nothing. It needs the 0.2.6 daemon; an older `tabd` still answers
   `no such delivery`.
-- A delivery that cannot be opened (quarantined, DEAD, or claimed by another
-  reader in the same instant) answers 409 with its state. `tabc open` prints
-  the reason and exits 1. An id that matches nothing still answers 404.
+- A delivery that cannot be opened answers 409. A quarantined or DEAD delivery
+  names its state; one another reader is opening in the same instant says to
+  try again. `tabc open` prints the reason and exits 1. An id that matches
+  nothing still answers 404.
 
 ### Upgrading from 0.2.4 to 0.2.5
 

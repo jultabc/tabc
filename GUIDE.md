@@ -383,7 +383,7 @@ tabc send --sender alice --to bob --subject "hello" --body "first"
 
 # shell 2
 tabc dm --node bob                     # the subject appears, state unchanged
-tabc open --node bob --id <full-uuid>  # body prints, state becomes INJECTED (an already READ message prints, unchanged)
+tabc open --node bob --id <full-uuid>  # body prints, state becomes INJECTED (an already READ or PROCESSED message prints, unchanged)
 tabc ack  --node bob --id <full-uuid> --state READ
 
 # shell 1
