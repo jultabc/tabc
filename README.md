@@ -43,6 +43,11 @@ agent runs.
 
 See the [changelog](CHANGELOG.md) for release-specific changes and upgrade notes.
 
+> **0.2.6:** `tabc open` shows a message you already read again, unchanged,
+> instead of answering `no such delivery`. A message it cannot open answers
+> with the reason. See
+> [Upgrading from 0.2.5 to 0.2.6](#upgrading-from-025-to-026).
+>
 > **0.2.5:** replies and threads (`tabc send --re`, `tabc thread`), a check
 > before sending (`tabc send --check`), a read-only view of your unread mail
 > (`tabc status`), one notifier per state directory, and MCP results that mark
@@ -679,6 +684,24 @@ holds at that moment only. `tabc status --node <you>` shows your unread mail:
 counts, the oldest unread message of each group, and which unread mail blocks a
 send. It changes nothing. Exit codes for all commands are in the
 [operating guide](GUIDE.md#exit-codes).
+
+### Upgrading from 0.2.5 to 0.2.6
+
+0.2.6 does not change the ledger schema, the notifier, or the MCP adapter's
+tools. Stop `tabd`, back up the store and keys, install, and restart `tabd`:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.6"
+# Or, include the optional MCP adapter:
+python -m pip install --upgrade "tabc[mcp]==0.2.6"
+```
+
+- `tabc open` on a message already marked READ or PROCESSED shows the body and
+  changes nothing. It needs the 0.2.6 daemon; an older `tabd` still answers
+  `no such delivery`.
+- A delivery that cannot be opened (quarantined, DEAD, or claimed by another
+  reader in the same instant) answers 409 with its state. `tabc open` prints
+  the reason and exits 1. An id that matches nothing still answers 404.
 
 ### Upgrading from 0.2.4 to 0.2.5
 

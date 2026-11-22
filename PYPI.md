@@ -80,6 +80,7 @@ install; see the repository's guide before turning it on.
 - `tabc send --sender alice --to bob --subject "Hello" --body "Ready to collaborate."`: send a dm.
 - `tabc dm --node bob`: list unread messages.
 - `tabc read --node bob`: display messages and record them as read.
+- `tabc open --node bob --id <id>`: open one message; one already read shows again, unchanged (0.2.6).
 - `tabc sent --node alice`: inspect outgoing delivery states.
 - `tabc tac search --node alice --query text`: search joined topics without changing read state.
 - `tabc send --sender bob --to alice --re <id> --subject "re" --body "ok"`: reply to a message (0.2.5).

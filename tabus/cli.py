@@ -1003,7 +1003,7 @@ def fn_read(a):
         )
         if oc != 200:
             # A quarantined message answers 409 with its reason; it is not opened.
-            print(f"  ⚠ {mid[:18]}… could not open — left unread ({orr.get('error') or orr})")
+            print(f"  ⚠ {mid[:18]}… could not open ({orr.get('error') or orr})")
             continue
         if orr.get("state") in ("READ", "PROCESSED"):
             # Marked read elsewhere after the listing above. Already read: skip it.
