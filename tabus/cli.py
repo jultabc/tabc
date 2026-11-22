@@ -916,11 +916,10 @@ def fn_open(a):
         node=a.node,
     )
     if code != 200:
-        print("failed:", r)
+        # 409 names the state (quarantined, DEAD, opened by another reader);
+        # 404 means the id matched nothing in this mailbox.
+        print("failed:", r.get("error") or r)
         sys.exit(1)
-    if r.get("quarantined"):
-        print(f"quarantined — the body was not opened ({r['quarantined']})")
-        return
     print(
         f"\n{'='*60}\nid      {r['id']}\nfrom    {r.get('sender_id') or r.get('from')}"
     )
@@ -1003,10 +1002,8 @@ def fn_read(a):
             node=a.node,
         )
         if oc != 200:
+            # A quarantined message answers 409 with its reason; it is not opened.
             print(f"  ⚠ {mid[:18]}… could not open — left unread ({orr.get('error') or orr})")
-            continue
-        if orr.get("quarantined"):
-            print(f"  ⚠ {mid[:18]}… quarantined — body not opened, left unread ({orr['quarantined']})")
             continue
         if orr.get("state") in ("READ", "PROCESSED"):
             # Marked read elsewhere after the listing above. Already read: skip it.

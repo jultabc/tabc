@@ -276,6 +276,48 @@ def main():
             "POST", "/reopen", {"node": "n2", "message_id": "99999999-9999-4999-8999-999999999999"}
         )
         check("S6e an unknown id still answers 404", c6u == 404, f"{c6u} {r6u}")
+
+        # S6f a body that fails its envelope check: the first open quarantines it and
+        #     must answer, not drop the connection (it used to raise KeyError on
+        #     sender_id). Both opens answer 409 with state QUARANTINED.
+        c6q, r6q = call(
+            "POST", "/send", {"from": "n1", "to": ["n2"], "subject": "tamper", "body": "original"}
+        )
+        tq = r6q.get("message_id") or r6q.get("id")
+        con.execute("UPDATE messages SET body='changed' WHERE id=?", (tq,))
+        con.commit()
+        try:
+            f1 = call("POST", "/reopen", {"node": "n2", "message_id": tq})
+        except Exception as e:  # the old failure: no answer at all
+            f1 = (None, {"exception": repr(e)})
+        st_q = con.execute(
+            "SELECT state FROM deliveries WHERE message_id=? AND recipient_id='n2'", (tq,)
+        ).fetchone()[0]
+        check(
+            "S6f first open of a tampered body answers 409 quarantined",
+            f1[0] == 409
+            and f1[1].get("state") == "QUARANTINED"
+            and bool(f1[1].get("quarantined"))
+            and st_q == "QUARANTINED",
+            f"{f1} {st_q}",
+        )
+        f2 = call("POST", "/reopen", {"node": "n2", "message_id": tq})
+        check(
+            "S6f second open answers 409 QUARANTINED",
+            f2[0] == 409 and f2[1].get("state") == "QUARANTINED",
+            f"{f2}",
+        )
+        q_run = subprocess.run(
+            [sys.executable, "-m", "tabus.cli", "open", "--node", "n2", "--id", tq[:8]],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        check(
+            "S6f tabc open on it exits 1 and names the state",
+            q_run.returncode == 1 and "QUARANTINED" in q_run.stdout and "original" not in q_run.stdout,
+            q_run.stdout[-300:] + q_run.stderr[-300:],
+        )
         con.close()
 
         # S8 verify execution in a process; calling functions alone was insufficient.
