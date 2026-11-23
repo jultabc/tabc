@@ -49,9 +49,19 @@ STAMP = re.compile(r"20\d\d-\d\d-\d\d|#\d{1,4}\b")
 # Names, checked only inside an attribution. Korean entries are guarded on both
 # sides so a name is not matched inside a longer word.
 NAMES = re.compile(
-    '(?<![\uac00-\ud7a3])(\ub2e8|\uc904|\ucfe8|\uc7ad|\uc6b0|\ud6c4|\uc5d0\uadf8|\uc2ec\ud574)(?![\uac00-\ud7a3])'
-    r"|(?<![A-Za-z])(cole|dora|wes|kai|ivy|nova|ezra|eli|zoe)(?![A-Za-z])"
+    '(?<![\uac00-\ud7a3])(\ub2e8|\uc904|\ucfe8|\uc7ad|\uc6b0|\ud6c4|\uc5d0\uadf8|\uc2ec\ud574|\ucf54\ucf54|\uc9c0\uc18c)(?![\uac00-\ud7a3])'
+    r"|(?<![A-Za-z])(cole|dora|wes|kai|ivy|nova|ezra|eli|zoe|remy|dev|milo)(?![A-Za-z])"
 )
+
+# A review reference: a name followed by the start of a message or commit id,
+# as in "(<name> 9d72d474)". The id alone is common in code; the name is what
+# makes it ours.
+REVIEW_ID = re.compile(r"\b[0-9a-f]{8}\b")
+# A parenthesis that is nothing but names, as in "(<name>)" or "(<name>, <name> M3)":
+# a credit with no date and no number. Matched whole, so a sentence in parentheses
+# that merely contains a name does not count.
+_NAME_ALT = NAMES.pattern
+ONLY_NAMES = re.compile(r"\s*(?:%s)(?:\s*[,·]\s*(?:%s))*(?:\s+[A-Z]{1,2}\d+)?\s*" % (_NAME_ALT, _NAME_ALT))
 
 # An internal issue number. `#s2` and `#fff` do not match: those are an anchor
 # and a colour, and both carry a letter.
@@ -124,12 +134,13 @@ def scan(path):
     """Findings in one file as (kind, line, excerpt)."""
     try:
         s = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
+    except (OSError, UnicodeDecodeError) as e:
+        # Not read is not clean: report it, so 0 findings never covers a file nobody saw.
+        return [("unreadable", 0, type(e).__name__)]
     out = []
     for m in ATTRIBUTION.finditer(s):
         inner = m.group(1)
-        if not STAMP.search(inner):
+        if not (STAMP.search(inner) or REVIEW_ID.search(inner) or ONLY_NAMES.fullmatch(inner)):
             continue
         if NAMES.search(inner):
             out.append(("name", s[: m.start()].count("\n") + 1, m.group(0)[:52]))
@@ -167,6 +178,7 @@ LABEL = {
     "issue": "internal issue number — meaningless outside this repository",
     "figure": "a counted figure — state how to count it instead",
     "path": "a path under a home directory — nobody else has it",
+    "unreadable": "a file that could not be read — not checked",
 }
 
 found = {}
@@ -176,7 +188,7 @@ for f in sorted(targets(sys.argv[1:])):
     for kind, line, text in scan(f):
         found.setdefault(kind, []).append((f, line, text))
 
-for kind in ("name", "issue", "figure", "path"):
+for kind in ("name", "issue", "figure", "path", "unreadable"):
     rows = found.get(kind, [])
     head = "  OK      " if not rows else "  FOUND   "
     print(f"{head}{LABEL[kind]}: {len(rows)}")
