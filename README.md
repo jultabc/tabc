@@ -437,7 +437,37 @@ or general desktop-app notification support.
 
 The daemon speaks JSON over HTTP. `tabd` listens on `127.0.0.1:8765` unless
 `--bind` and `--port` say otherwise. `TABC_BUS_URL` sets where clients connect;
-it does not change where `tabd` listens, so set it to the same address. Rather than copy the routes here — a list and its count both go stale
+it does not change where `tabd` listens, so set it to the same address.
+
+Settings can also live in `config.json` inside the state directory
+(`~/.tabc/config.json`, or `$TABC_HOME/config.json`). For each setting the order
+is: environment variable or flag, then `config.json`, then the built-in default.
+
+```json
+{"port": 8765, "bus_url": "http://127.0.0.1:8765", "doorbell_poll_sec": 2}
+```
+
+- `port`: where `tabd` listens without `--port`. Local clients follow it when
+  `bus_url` and `TABC_BUS_URL` are not set.
+- `bus_url`: where clients connect (overridden by `TABC_BUS_URL`).
+- `doorbell_poll_sec`: seconds between doorbell rounds (overridden by `DOORBELL_POLL_SEC`).
+
+All keys are optional; leave a key out to use the default (`null` is refused).
+`doorbell_poll_sec` must be a finite number above 0 and at most 86400, and
+`bus_url` an `http://` or `https://` origin with a host, no spaces or control
+characters, and nothing after it (a trailing `/` is dropped, from `TABC_BUS_URL`
+too). A key that appears twice is refused.
+
+A file that is unreadable, not UTF-8, not JSON, or has an unknown key or a wrong
+value is never ignored. The error names the file and the key:
+
+- `tabc`: `--help` and commands that do not reach `tabd` still work; the first
+  command that needs `tabd` stops with `config error` and exits 1.
+- `tabd`, the doorbell and the MCP server stop at startup, even when `--port`
+  or an environment variable would have replaced the broken value. Fix or
+  remove the file, then start them again.
+
+Rather than copy the routes here — a list and its count both go stale
 the first time one is added or dropped, and this paragraph's did — ask the daemon
 what it dispatches on:
 
@@ -524,7 +554,7 @@ in `SHADOW` mode, which records what it *would* have typed and types nothing:
 ```bash
 DOORBELL_MODE=LIVE python3 -m tabus.doorbell     # ring for real
 DOORBELL_MODE=SHADOW python3 -m tabus.doorbell   # record only; the default
-DOORBELL_POLL_SEC=2                              # poll interval, default 2
+DOORBELL_POLL_SEC=2                              # poll interval, default 2 (or config.json)
 ```
 
 Stop it with the usual signal to that process; there is no daemon to ask.

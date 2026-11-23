@@ -1110,6 +1110,14 @@ def init_extras() -> None:
 EXIT_PORT_IN_USE = 2
 
 
+def _config_port() -> int:
+    """--port default: config.json port, else the built-in default (paths.bus_port)."""
+    try:
+        return paths.bus_port()
+    except paths.ConfigError as e:
+        sys.exit(f"tabd: config error: {e}")
+
+
 def main():
     """Console entry point; see the note in tabus.cli.main."""
     import argparse
@@ -1123,7 +1131,7 @@ def main():
         action="version",
         version=f"tabd (tabus) {tabus.__version__}\nprotocol {tabus.PROTOCOL_VERSION}",
     )
-    ap.add_argument("--port", type=int, default=paths.DEFAULT_BUS_PORT)
+    ap.add_argument("--port", type=int, default=_config_port())
     ap.add_argument(
         "--bind",
         default="127.0.0.1",

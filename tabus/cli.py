@@ -43,7 +43,13 @@ import uuid
 # 🔴 nodekey is imported lazily so local-only commands such as --help do not load
 #    cryptography. Every HTTP request is still signed inside call().
 
-BASE = os.environ.get("TABC_BUS_URL", paths.DEFAULT_BUS_URL)
+# Where tabd is: TABC_BUS_URL, then config.json, then the default (paths.bus_url).
+# 🔴 A broken config.json does not stop --help or local-only commands; it stops the
+#    first command that needs tabd, with the file and key named.
+try:
+    BASE, _CONFIG_ERROR = paths.bus_url(), None
+except paths.ConfigError as _e:
+    BASE, _CONFIG_ERROR = None, str(_e)
 
 # 🔴 How much of a message id the listings print. One name, because the two
 #    listings must agree: a reader who learns the shape from one and pastes into
@@ -112,6 +118,9 @@ MAPPING = {
 
 
 def call(method: str, path: str, payload=None, node=None):
+    if BASE is None:
+        print(f"config error: {_CONFIG_ERROR}", file=sys.stderr)
+        sys.exit(1)
     req = urllib.request.Request(BASE + path, method=method)
     # 🔴 Authenticate every request — read and write — by node-key signature. There
     #    is no shared bus token any more: a secret everyone holds proves only that

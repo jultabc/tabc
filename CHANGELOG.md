@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `config.json` in the state directory (`~/.tabc` or `$TABC_HOME`) for
+  `port`, `bus_url` and `doorbell_poll_sec`. Environment variables and flags
+  still win; without the file nothing changes. An unknown key or a wrong value
+  stops the command that needs it and names the file and key.
+
+### Changed
+
+- The bus port and URL, the thread page limits and the doorbell interval are
+  defined once each instead of in two to four files. Values are unchanged.
+
 ## 0.2.6 — 2026-11-22
 
 ### Fixed

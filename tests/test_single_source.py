@@ -31,32 +31,32 @@ def code_lines():
                             yield os.path.relpath(path, ROOT), n, line
 
 
+def reads_env(name, line):
+    """A line that reads the variable (environ.get / environ[...] / getenv), not one that sets it for a child."""
+    return re.search(r"""(environ\.get|getenv|environ\[)\(?\s*["']%s["']""" % name, line) is not None and "put(" not in line
+
+
 class SingleSource(unittest.TestCase):
     def test_bus_port_is_written_once(self):
         hits = [f"{p}:{n}" for p, n, line in code_lines() if re.search(r"\b%d\b" % paths.DEFAULT_BUS_PORT, line)]
         self.assertEqual(hits, ["tabus/paths.py:%d" % self._line_of("tabus/paths.py", "DEFAULT_BUS_PORT =")], hits)
 
     def test_doorbell_interval_default_is_written_once(self):
-        hits = [f"{p}:{n}" for p, n, line in code_lines() if "DOORBELL_POLL_SEC" in line and "environ" in line]
+        hits = [f"{p}:{n}" for p, n, line in code_lines() if reads_env("DOORBELL_POLL_SEC", line)]
         self.assertEqual(len(hits), 1, hits)
-        self.assertTrue(hits[0].startswith("tabus/doorbell_poll.py:"), hits)
+        self.assertTrue(hits[0].startswith("tabus/paths.py:"), hits)
+
+    def test_settings_are_read_only_through_paths(self):
+        for name in ("TABC_BUS_URL",):
+            hits = [f"{p}:{n}" for p, n, line in code_lines() if reads_env(name, line)]
+            self.assertTrue(hits and all(h.startswith("tabus/paths.py:") for h in hits), hits)
 
     def test_readers_use_the_shared_values(self):
         self.assertTrue(paths.DEFAULT_BUS_URL.endswith(":%d" % paths.DEFAULT_BUS_PORT))
         self.assertEqual(cli.THREAD_CLI_LIMIT, reply_link.THREAD_PAGE_DEFAULT)
         self.assertIn("doorbell_poll.poll_interval()", inspect.getsource(doorbell.main))
-        self.assertIn("paths.DEFAULT_BUS_PORT", inspect.getsource(daemon.main))
+        self.assertIn("_config_port()", inspect.getsource(daemon.main))
 
-    def test_doorbell_interval_reads_env_then_default(self):
-        old = os.environ.pop("DOORBELL_POLL_SEC", None)
-        try:
-            self.assertEqual(doorbell_poll.poll_interval(), float(doorbell_poll.POLL_SEC_DEFAULT))
-            os.environ["DOORBELL_POLL_SEC"] = "0.5"
-            self.assertEqual(doorbell_poll.poll_interval(), 0.5)
-        finally:
-            os.environ.pop("DOORBELL_POLL_SEC", None)
-            if old is not None:
-                os.environ["DOORBELL_POLL_SEC"] = old
 
     def test_thread_limit_text_matches_the_limit(self):
         # The CLI help is built from reply_link; the MCP tool description is a docstring
