@@ -570,7 +570,7 @@ in `SHADOW` mode, which records what it *would* have typed and types nothing:
 ```bash
 DOORBELL_MODE=LIVE python3 -m tabus.doorbell     # ring for real
 DOORBELL_MODE=SHADOW python3 -m tabus.doorbell   # record only; the default
-DOORBELL_POLL_SEC=2                              # poll interval, default 2 (or config.json)
+DOORBELL_POLL_SEC=2                              # poll interval, default 2 (or config.json from the release after 0.2.6)
 ```
 
 Stop it with the usual signal to that process; there is no daemon to ask.
