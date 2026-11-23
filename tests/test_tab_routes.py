@@ -46,13 +46,13 @@ def route_of(node):
 
 # 1. adapter and target, with host_id, create a route row.
 ok, msg = tabus.bus_register(
-    con, "carol", "generic", adapter="iterm2", target="w0t1p0:GUID-WES", host_id="h1"
+    con, "carol", "generic", adapter="iterm2", target="w0t1p0:GUID-W1", host_id="h1"
 )
 r = route_of("carol")
 check("1 registration with adapter and target succeeds", ok)
 check("1 creates a route row", r is not None)
 check("1 adapter=iterm2", bool(r) and r["adapter"] == "iterm2")
-check("1 stores target", bool(r) and r["target"] == "w0t1p0:GUID-WES")
+check("1 stores target", bool(r) and r["target"] == "w0t1p0:GUID-W1")
 check("1 revoked_at is NULL (active)", bool(r) and r["revoked_at"] is None)
 check("1 message reports the route", "route=iterm2" in msg)
 

@@ -150,14 +150,14 @@ class Designate(unittest.TestCase):
         out, code, err, _ = self.run_designate("atlas", reply)
         self.assertEqual((out, code), (None, 2))
         self.assertIn("tac atlas is closed; nothing was done", err)
-        self.assertIn(f"atlas                     {UUID}  closed 2026-10-02", err)
+        self.assertIn(f"atlas                    {UUID}  closed 2026-10-02", err)
         self.assertIn("atlas-watch", err)
         self.assertIn("open", err)
         self.assertIn("code TAC_NAME_UNRESOLVED", err)
 
     def test_no_exact_lists_similar_and_exits_2(self):
         reply = (200, {"exact": None, "similar": [{"tac_id": UUID, "name": "atlas", "closed_at": None}]})
-        out, code, err, _ = self.run_designate("atl", reply)
+        out, code, err, _ = self.run_designate("loo", reply)
         self.assertEqual((out, code), (None, 2))
         self.assertIn("no tac is named 'loo'; nothing was done. Similar names:", err)
         self.assertIn(f"{UUID}  open", err)

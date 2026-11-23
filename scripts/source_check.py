@@ -33,6 +33,8 @@ already flags, not the primary net. Adding a name here is cheap; relying on
 this file to be complete is not safe.
 """
 
+import hashlib
+import os
 import pathlib
 import re
 import subprocess
@@ -48,6 +50,7 @@ EXCERPT_CHARS = 52          # characters of a finding printed on its line
 ROWS_SHOWN = 6              # findings printed per kind; the rest are counted
 ATTRIBUTION_MAX_CHARS = 60  # a credit is short; a longer parenthesis is prose
 REVIEW_ID_HEX = 8           # the leading characters of a message or commit id
+NAME_DIGEST_HEX = 16        # hex characters of sha256 kept per name in NAME_DIGESTS
 # Characters of context kept (before, after) a match, so the excerpt shows what it
 # is attached to: an issue number needs the words before it, a path the folder
 # names around it, a figure the noun after it.
@@ -59,36 +62,74 @@ BINARY_SUFFIX = (".jar", ".gif", ".png", ".jpg", ".jpeg", ".ico", ".webp", ".pdf
 ATTRIBUTION = re.compile(r"\(([^()\n]{0,%d})\)" % ATTRIBUTION_MAX_CHARS)
 STAMP = re.compile(r"20\d\d-\d\d-\d\d|#\d{1,4}\b")
 
-# Names, checked only inside an attribution. Korean entries are guarded on both
-# sides so a name is not matched inside a longer word.
-# One list of English names; both the attribution check and the line check build
-# their pattern from it, so the two cannot disagree about who is a name.
-ENGLISH_NAMES = ("cole", "dora", "wes", "kai", "ivy", "nova", "ezra", "eli", "zoe", "remy", "dev", "milo", "neil")
-_ENGLISH_NAMES = r"(?<![A-Za-z])(?:%s)(?![A-Za-z])" % "|".join(ENGLISH_NAMES)
+# Names are held as digests, not written out: the list of who works on this
+# project is not something a public file should carry. A word is a name when
+# the first NAME_DIGEST_HEX hex characters of sha256(word.lower()) are in this set. To add a
+# name, add its digest; for a one-off run, TABC_SOURCE_CHECK_NAMES (comma list)
+# adds names without editing the file.
+NAME_DIGESTS = frozenset({
+    "0075870f97c892ba",
+    "02fc885b61db44a8",
+    "084a4bd8972f8d49",
+    "167728dc60e9efc6",
+    "2cc4473ea6bd95fc",
+    "31611159e7e6ff78",
+    "34707c3f40dfa20c",
+    "3f73ef1623ee713d",
+    "4982030d5297756a",
+    "4e04e3938cc9c67e",
+    "4f682b71153ffa91",
+    "57cda594148cb40c",
+    "637bfe7928f524a3",
+    "665377dc8a2b154a",
+    "6b2858fc96a3e0ff",
+    "778c553efa00d3c4",
+    "787a6732f255f31a",
+    "7dd887dc71b51e81",
+    "9871e84da89f2271",
+    "b260539511e16996",
+    "bfc978e39c7af4d2",
+    "c34045c1a1db8d1b",
+    "dec8530634613c5c",
+    "dfedd225bb659d50",
+    "ec4f2dbb3b140095",
+    "ffd3d21b48469c85",
+})
+_EXTRA = {w.strip().lower() for w in os.environ.get("TABC_SOURCE_CHECK_NAMES", "").split(",") if w.strip()}
 
-NAMES = re.compile(
-    '(?<![\uac00-\ud7a3])(\ub2e8|\uc904|\ucfe8|\uc7ad|\uc6b0|\ud6c4|\uc5d0\uadf8|\uc2ec\ud574|\ucf54\ucf54|\uc9c0\uc18c)(?![\uac00-\ud7a3])'
-    r"|" + _ENGLISH_NAMES
-)
 
-# A review reference: a name followed by the start of a message or commit id,
-# as in "(<name> 9d72d474)". The id alone is common in code; the name is what
-# makes it ours.
+def is_name(word):
+    w = word.lower()
+    return w in _EXTRA or hashlib.sha256(w.encode()).hexdigest()[:NAME_DIGEST_HEX] in NAME_DIGESTS
+
+
+# A review reference: the start of a message or commit id. The id alone is common
+# in code; a name next to it is what makes it ours.
 REVIEW_ID = re.compile(r"\b[0-9a-f]{%d}\b" % REVIEW_ID_HEX)
-# A parenthesis that is nothing but names, as in "(<name>)" or "(<name>, <name> M3)":
-# a credit with no date and no number. Matched whole, so a sentence in parentheses
-# that merely contains a name does not count.
-_NAME_ALT = NAMES.pattern
-ONLY_NAMES = re.compile(r"\s*(?:%s)(?:\s*[,·]\s*(?:%s))*(?:\s+[A-Z]{1,2}\d+)?\s*" % (_NAME_ALT, _NAME_ALT))
-
-# A credit anywhere on a line, not only in parentheses: a name followed by the
-# start of a review id ("# <name> 9d72d474" at the end of a code line), or a name
-# followed by the verb of a credit ("<name> found", "<name> review"). The first
-# version looked only inside parentheses and missed both.
-LINE_CREDIT = re.compile(
-    _ENGLISH_NAMES + r"(?:\s+[0-9a-f]{%d}\b|\s+(?:found|review(?:ed)?|reproduced|spotted|noticed|caught|CR)\b|\s+and\s+"
-    % REVIEW_ID_HEX + _ENGLISH_NAMES + r"\s+(?:found|reproduced|sent)\b)"
+WORD = re.compile(r"[A-Za-z]+|[\uac00-\ud7a3]+")
+# Words that only ever sit beside a credit, so "(<name> review)" or
+# "(<name>'s finding)" counts like "(<name>)" alone.
+CREDIT_WORDS = {"review", "reviewed", "found", "finding", "findings", "contract", "criteria", "against", "and", "s"}
+# A credit anywhere on a line: "<name> <id>", "<name> found", "<name>'s finding",
+# "per <name>'s ...", "<name> and <name> reproduced", "<name>, <date>:".
+LINE_SHAPES = (
+    re.compile(r"\b([A-Za-z]+)(?:'s)?\s+(?:[0-9a-f]{%d}\b|found|finding|findings|review(?:ed)?|reproduced|spotted|noticed|caught|CR|criteria|contract)\b" % REVIEW_ID_HEX),
+    re.compile(r"\b([A-Za-z]+)'s\b"),
+    re.compile(r"\b([A-Za-z]+)\s+and\s+[A-Za-z]+\s+(?:found|reproduced|sent)\b"),
+    re.compile(r"\b([A-Za-z]+),\s+20\d\d-\d\d-\d\d"),
 )
+
+
+def credit_in_parenthesis(inner):
+    """A parenthesis credits someone when it names them and is otherwise a date,
+    an id, short labels (M3) or credit words — not a sentence that mentions a name."""
+    words = WORD.findall(inner)
+    if not any(is_name(w) for w in words):
+        return False
+    if STAMP.search(inner) or REVIEW_ID.search(inner):
+        return True
+    return all(is_name(w) or w.lower() in CREDIT_WORDS or len(w) == 1 for w in words)
+
 
 # An internal issue number. `#s2` and `#fff` do not match: those are an anchor
 # and a colour, and both carry a letter.
@@ -195,12 +236,12 @@ def scan(path):
     out = []
     for m in ATTRIBUTION.finditer(s):
         inner = m.group(1)
-        if not (STAMP.search(inner) or REVIEW_ID.search(inner) or ONLY_NAMES.fullmatch(inner)):
-            continue
-        if NAMES.search(inner):
+        if credit_in_parenthesis(inner):
             out.append(("name", s[: m.start()].count("\n") + 1, m.group(0)[:EXCERPT_CHARS]))
-    for m in LINE_CREDIT.finditer(s):
-        out.append(("name", s[: m.start()].count("\n") + 1, excerpt(s, m, "credit")))
+    for shape in LINE_SHAPES:
+        for m in shape.finditer(s):
+            if is_name(m.group(1)):
+                out.append(("name", s[: m.start()].count("\n") + 1, excerpt(s, m, "credit")))
     for m in ISSUE.finditer(s):
         line = s[: m.start()].count("\n") + 1
         out.append(("issue", line, excerpt(s, m, "issue")))

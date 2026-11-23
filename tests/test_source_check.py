@@ -15,11 +15,14 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOL = os.path.join(ROOT, "scripts", "source_check.py")
-NAME = "ja" + "ck"  # spelled apart so this file is not a finding itself
+# A made-up name, added for these runs only: no real name is written in this file.
+NAME = "zorblax"
+OTHER = "quillon"
+ENV = dict(os.environ, TABC_SOURCE_CHECK_NAMES=f"{NAME},{OTHER}")
 
 
 def run(*paths):
-    return subprocess.run([sys.executable, TOOL, *paths], capture_output=True, text=True, cwd=ROOT)
+    return subprocess.run([sys.executable, TOOL, *paths], capture_output=True, text=True, cwd=ROOT, env=ENV)
 
 
 class SourceCheck(unittest.TestCase):
@@ -39,7 +42,12 @@ class SourceCheck(unittest.TestCase):
             f"    def test_x(self):  # {NAME} 4c84df2c\n",
             f"# {NAME} found the case; the rule is now one place.\n",
             f"# 0 bytes back ({NAME} review J1).\n",
-            f'"""The reproduction ivy and {NAME} sent, run against tabd."""\n',
+            f'"""The reproduction {OTHER} and {NAME} sent, run against tabd."""\n',
+            f"# S3 must stay CLAIMED ({NAME.capitalize()}'s finding).\n",
+            f"# verify all {NAME.capitalize()}'s criteria; exit 1 on failure.\n",
+            f"# defined once in the file ({NAME.capitalize()}).\n",
+            f"# fall back to pull, per {NAME.capitalize()}'s 475/476 findings.\n",
+            f"{NAME.capitalize()}, 2026-08-26: only the last value was kept.\n",
         ):
             r = self.check_text(line)
             self.assertEqual(r.returncode, 1, line + r.stdout)
@@ -49,8 +57,8 @@ class SourceCheck(unittest.TestCase):
         for line in (
             "# a hex id alone (9d72d474) is not a credit.\n",
             "# see the table (exit codes) above.\n",
-            "x = f(a, b)  # (cole down period)\n",
-            "# let the cache cole down before the next round\n",
+            "x = f(a, b)  # (warm up period)\n",
+            f"# the {NAME} module is loaded first, then the rest\n",  # a name in a sentence is not a credit
         ):
             r = self.check_text(line)
             self.assertNotIn("FOUND   internal name", r.stdout, line)
@@ -80,12 +88,15 @@ class SourceCheck(unittest.TestCase):
             exec(compile(f.read().split("\nfound = {}")[0], TOOL, "exec"), ns)
         return ns
 
-    def test_one_name_list_feeds_both_checks(self):
+    def test_names_are_held_as_digests(self):
         ns = self.load()
-        for name in ns["ENGLISH_NAMES"]:
-            self.assertTrue(ns["NAMES"].search(f"({name} 2026-01-01)"), name)
-            self.assertTrue(ns["LINE_CREDIT"].search(f"# {name} 0123abcd"), name)
-        self.assertNotIn("cole|dora|wes", open(TOOL, encoding="utf-8").read())  # no second spelled-out copy
+        digests = ns["NAME_DIGESTS"]
+        self.assertTrue(digests)
+        self.assertTrue(all(len(d) == ns["NAME_DIGEST_HEX"] and int(d, 16) >= 0 for d in digests))
+        # The checker itself writes no name out: none of its words is a name.
+        with open(TOOL, encoding="utf-8") as f:
+            words = set(ns["WORD"].findall(f.read()))
+        self.assertEqual(sorted(w for w in words if ns["is_name"](w) and w.lower() not in (NAME, OTHER)), [])
 
     def git_repo_with(self, d, name, text):
         subprocess.run(["git", "init", "-q", d], check=True)
@@ -96,7 +107,7 @@ class SourceCheck(unittest.TestCase):
     def test_tracked_file_without_suffix_is_checked(self):
         with tempfile.TemporaryDirectory() as d:
             self.git_repo_with(d, "LICENSE", f"MIT. Reviewed by {NAME} 1234abcd.\n")
-            r = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, cwd=d)
+            r = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, cwd=d, env=ENV)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("LICENSE", r.stdout)
 
@@ -116,9 +127,9 @@ class SourceCheck(unittest.TestCase):
                 f.write("#!/bin/sh\necho fatal: simulated >&2\nexit 128\n")
             os.chmod(os.path.join(fake, "git"), 0o755)
             bad = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, cwd=d,
-                                 env=dict(os.environ, PATH=fake + os.pathsep + os.environ["PATH"]))
+                                 env=dict(ENV, PATH=fake + os.pathsep + os.environ["PATH"]))
             none = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, cwd=d,
-                                  env=dict(os.environ, PATH="/nonexistent"))
+                                  env=dict(ENV, PATH="/nonexistent"))
         for r in (bad, none):
             self.assertEqual(r.returncode, 2, r.stdout)
             self.assertIn("not checked", r.stdout)
