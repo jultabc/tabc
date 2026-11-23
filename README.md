@@ -129,10 +129,13 @@ All code is in the `tabus` package.
 | `tabus/daemon.py` | `tabd`: HTTP routes, signature check, calls into `bus.py` |
 | `tabus/cli.py` | `tabc`: one function per command, each a signed HTTP call to `tabd` |
 | `tabus/doorbell.py`, `tabus/doorbell_poll.py` | the notifier: reads unread state, rings routes, records rings |
+| `tabus/admin.py` | `tabm`: operator commands; reuses the `cli.py` handlers |
 | `tabus/mcp_server.py` | the optional MCP adapter |
+| `tabus/codex_queue.py` | notifications to an explicit Codex thread, and their local receipts |
 | `tabus/reply_link.py`, `tabus/send_refusal.py`, `tabus/tac_store.py` | reply visibility, send refusals, tac storage |
 | `tabus/route_capture.py`, `tabus/terminal_frontend.py` | terminal routes the doorbell rings |
 | `tabus/nodekey.py`, `tabus/paths.py` | node keys and the state directory |
+| other `tabus/*.py` | smaller helpers: tac lookup and migration, refusal wording, language, compatibility aliases |
 
 A change to delivery behaviour usually touches `bus.py` and `daemon.py`
 together. `tests/test_acceptance.py` starts a real `tabd` on a temporary
