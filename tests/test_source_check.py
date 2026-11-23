@@ -36,6 +36,10 @@ class SourceCheck(unittest.TestCase):
             f"# the same sentence would drift ({NAME}).\n",
             f"# a request was stored ({NAME}, {NAME} M3).\n",
             f"# measured ({NAME} 2026-11-23).\n",
+            f"    def test_x(self):  # {NAME} 4c84df2c\n",
+            f"# {NAME} found the case; the rule is now one place.\n",
+            f"# 0 bytes back ({NAME} review J1).\n",
+            f'"""The reproduction ivy and {NAME} sent, run against tabd."""\n',
         ):
             r = self.check_text(line)
             self.assertEqual(r.returncode, 1, line + r.stdout)
@@ -46,6 +50,7 @@ class SourceCheck(unittest.TestCase):
             "# a hex id alone (9d72d474) is not a credit.\n",
             "# see the table (exit codes) above.\n",
             "x = f(a, b)  # (cole down period)\n",
+            "# let the cache cole down before the next round\n",
         ):
             r = self.check_text(line)
             self.assertNotIn("FOUND   internal name", r.stdout, line)
@@ -69,8 +74,8 @@ class SourceCheck(unittest.TestCase):
         self.assertEqual(re.findall(r"len\(rows\)\s*[-+>]=?\s*\d", text), [])
 
     def test_published_code_has_no_credits(self):
-        # Everything in the public repository that holds code, tests included.
-        r = run("tabus", "scripts", "clients", "tests")
+        # Every file git tracks (no paths = git ls-files), tests and docs included.
+        r = run()
         self.assertEqual(r.returncode, 0, r.stdout)
 
 
