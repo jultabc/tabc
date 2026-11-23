@@ -30,8 +30,10 @@ def main():
             ["git", "ls-files"], cwd=scan_root,
             capture_output=True, text=True, timeout=10
         ).stdout.splitlines()
-    except Exception:
-        tracked = []
+    except (OSError, subprocess.SubprocessError) as e:
+        tracked, scan_error = [], f"git ls-files failed: {e}"
+    else:
+        scan_error = None
 
     import re
     cred_pattern = re.compile(
@@ -39,6 +41,7 @@ def main():
         re.IGNORECASE,
     )
     hits = []
+    unreadable = []
     for f in tracked:
         fp = os.path.join(scan_root, f)
         if not os.path.exists(fp):
@@ -47,8 +50,10 @@ def main():
             content = open(fp, encoding="utf-8", errors="ignore").read()
             for m in cred_pattern.finditer(content):
                 hits.append({"file": f, "line": content[:m.start()].count("\n") + 1})
-        except Exception:
-            pass
+        except OSError as e:
+            # Not read = not scanned. Listed in the output, so "0 hits" is not
+            # claimed for a file nobody looked at.
+            unreadable.append({"file": f, "error": e.strerror or str(e)})
 
     # 3) Check for environment files.
     env_files = []
@@ -64,6 +69,10 @@ def main():
         "hits_by_dir": {},
         "env_files": env_files,
         "hits_detail": hits[:20],
+        "unreadable_files": unreadable,
+        # Set when the file list could not be read: then nothing was scanned, and
+        # tracked_cred_literal_hits = 0 means "not looked", not "clean".
+        "scan_error": scan_error,
     }
     for h in hits:
         d = h["file"].split("/")[0] if "/" in h["file"] else "root"
