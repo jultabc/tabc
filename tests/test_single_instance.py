@@ -108,7 +108,14 @@ try:
     lock = os.path.join(home, "lock-doorbell")
     check("lock file holds the first PID", open(lock).read().strip() == str(first.pid))
     ledger_db = os.path.join(home, "data", "doorbell_ring.db")
+    # The first doorbell prints "started" and then writes its start record. Counting
+    # in between read the first one's own record as the second's (a CI failure), so
+    # wait for that record before taking the count.
+    end = time.time() + 10.0
+    while (rows(ledger_db, "starts") or 0) < 1 and time.time() < end:
+        time.sleep(0.1)
     before = rows(ledger_db, "starts") if os.path.exists(ledger_db) else None
+    check("first doorbell recorded its start", (before or 0) >= 1, f"starts={before}")
     second = bell(env, l2)
     try:
         rc2 = second.wait(10)
