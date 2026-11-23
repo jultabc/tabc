@@ -27,7 +27,7 @@ candidate, and never a line in its thread view.
    else is REPLY_TARGET_INVALID and the target is not repeated back, so a refusal
    or a log line never carries text the caller chose beyond an id's characters.
 
-🔴 Nothing deletes from `messages` (no DELETE in this release; `tabc rm --purge`
+🔴 Nothing deletes from `messages` (no DELETE in this release; `tabm purge`
    removes only a node with no history). So a parent cannot vanish under its
    replies, and no foreign-key action is set. A release that adds message
    deletion decides what happens to replies then.
