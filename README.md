@@ -799,7 +799,7 @@ python -m pip install --upgrade "tabc[mcp]==0.2.7"
 - A `config.json` with an unknown key or a wrong value is never ignored: `tabd`,
   the notifier and the MCP adapter stop at startup, and `tabc` stops at the first
   command that needs `tabd`. Fix or remove the file.
-- `tabc rm --purge` answers 503 on a database error and removes nothing.
+- `tabm purge` and `tabm disable` answer 503 on a database error and change nothing.
 
 ### Upgrading from 0.2.5 to 0.2.6
 

@@ -73,6 +73,57 @@ class SourceCheck(unittest.TestCase):
         self.assertEqual(re.findall(r"m\.(?:start|end)\(\)\s*[-+]\s*\d", text), [])
         self.assertEqual(re.findall(r"len\(rows\)\s*[-+>]=?\s*\d", text), [])
 
+    def load(self):
+        # The module is a script; take its definitions without running the report.
+        ns = {}
+        with open(TOOL, encoding="utf-8") as f:
+            exec(compile(f.read().split("\nfound = {}")[0], TOOL, "exec"), ns)
+        return ns
+
+    def test_one_name_list_feeds_both_checks(self):
+        ns = self.load()
+        for name in ns["ENGLISH_NAMES"]:
+            self.assertTrue(ns["NAMES"].search(f"({name} 2026-01-01)"), name)
+            self.assertTrue(ns["LINE_CREDIT"].search(f"# {name} 0123abcd"), name)
+        self.assertNotIn("cole|dora|wes", open(TOOL, encoding="utf-8").read())  # no second spelled-out copy
+
+    def git_repo_with(self, d, name, text):
+        subprocess.run(["git", "init", "-q", d], check=True)
+        with open(os.path.join(d, name), "w", encoding="utf-8") as f:
+            f.write(text)
+        subprocess.run(["git", "-C", d, "add", name], check=True)
+
+    def test_tracked_file_without_suffix_is_checked(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.git_repo_with(d, "LICENSE", f"MIT. Reviewed by {NAME} 1234abcd.\n")
+            r = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, cwd=d)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("LICENSE", r.stdout)
+
+    def test_directory_argument_includes_files_without_suffix(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "LICENSE"), "w", encoding="utf-8") as f:
+                f.write(f"# {NAME} 1234abcd\n")
+            r = run(d)
+        self.assertEqual(r.returncode, 1, r.stdout)
+
+    def test_git_failure_is_not_zero_findings(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.git_repo_with(d, "LICENSE", f"# {NAME} 1234abcd\n")
+            fake = os.path.join(d, "bin")
+            os.makedirs(fake)
+            with open(os.path.join(fake, "git"), "w") as f:
+                f.write("#!/bin/sh\necho fatal: simulated >&2\nexit 128\n")
+            os.chmod(os.path.join(fake, "git"), 0o755)
+            bad = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, cwd=d,
+                                 env=dict(os.environ, PATH=fake + os.pathsep + os.environ["PATH"]))
+            none = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, cwd=d,
+                                  env=dict(os.environ, PATH="/nonexistent"))
+        for r in (bad, none):
+            self.assertEqual(r.returncode, 2, r.stdout)
+            self.assertIn("not checked", r.stdout)
+            self.assertNotIn("0 findings", r.stdout)
+
     def test_published_code_has_no_credits(self):
         # Every file git tracks (no paths = git ls-files), tests and docs included.
         r = run()

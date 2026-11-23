@@ -11,10 +11,11 @@
 
 ### Fixed
 
-- `tabc rm --purge` (POST /remove) on a database error other than a missing
+- `tabm purge` (POST /remove) on a database error other than a missing
   open-records table rolls back and answers 503 `database error (...); nothing
   was removed`, instead of removing the node and leaving its open records for
-  the next owner of the name, or dropping the connection.
+  the next owner of the name. `tabm disable` (the same endpoint) answers 503
+  on a database error too, instead of dropping the connection.
 - `scripts/link_check.py` counts a file it cannot read as broken (`--strict`
   exits 1) instead of reporting 0 broken.
 - `scripts/security_snapshot.py` lists files it cannot read
