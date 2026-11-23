@@ -46,8 +46,10 @@ class SingleSource(unittest.TestCase):
         # scripts. mcp_server's allow-list of loopback names is a different rule and
         # is not counted. The demo shell script and the Java tests start their own
         # servers on their own ports and are not counted either.
+        allowed = ("tabus/mcp_server.py", 'base.hostname not in ("localhost", "127.0.0.1", "::1")')
         hits = [f"{p}:{n}" for p, n, line in code_lines()
-                if p.endswith(".py") and re.search(r"(?<![\d.])127\.0\.0\.1(?![\d.])", line) and "localhost" not in line]
+                if p.endswith(".py") and re.search(r"(?<![\d.])127\.0\.0\.1(?![\d.])", line)
+                and not (p == allowed[0] and allowed[1] in line)]
         self.assertEqual(hits, ["tabus/paths.py:%d" % self._line_of("tabus/paths.py", "DEFAULT_BUS_HOST =")], hits)
 
     def test_doorbell_interval_default_is_written_once(self):
