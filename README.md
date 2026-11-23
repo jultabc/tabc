@@ -224,6 +224,9 @@ can use one installation without silently inheriting another agent's identity.
 Commands that have no explicit identity option stop before HTTP unless
 `TABC_NODE` is set.
 
+The commands below talk to `tabd`. Start it first (`tabd &`, see
+[Quick start](#quick-start)); until it runs they fail with a connection error.
+
 For node changes in `tabm`, `--node` is the signed caller and `--target` is the
 node being changed. The former `tabc rm` and `restore` commands are no longer
 accepted. The management section below lists the `tabm` commands and the
@@ -336,9 +339,20 @@ fails with a connection error until it is running.
 tabd &   # 127.0.0.1:8765 by default
 ```
 
+If another program already uses the port, `tabd` stops with
+`127.0.0.1:8765 is already in use — not started`. Start it on another port and
+point the clients at it:
+
+```bash
+tabd --port 8766 &
+export TABC_BUS_URL=http://127.0.0.1:8766
+```
+
 ```bash
 # In Alice's shell, register the node — the identity rides on the command
 tabc register --node alice --kind claude
+# "no verified route captured from this process" is expected here: without a
+# terminal route there is no alarm, and pull below still reads the messages
 
 # In Bob's shell, register bob the same way
 
@@ -439,9 +453,11 @@ The daemon speaks JSON over HTTP. `tabd` listens on `127.0.0.1:8765` unless
 `--bind` and `--port` say otherwise. `TABC_BUS_URL` sets where clients connect;
 it does not change where `tabd` listens, so set it to the same address.
 
-Settings can also live in `config.json` inside the state directory
-(`~/.tabc/config.json`, or `$TABC_HOME/config.json`). For each setting the order
-is: environment variable or flag, then `config.json`, then the built-in default.
+Settings can also live in `config.json` inside the state directory:
+`~/.tabc/config.json`, or `$TABC_HOME/config.json`. Version 0.2.6 does not read
+this file; the next release does (see Unreleased in [CHANGELOG.md](CHANGELOG.md)).
+For each setting the order is: environment variable or flag, then `config.json`,
+then the built-in default.
 
 ```json
 {"port": 8765, "bus_url": "http://127.0.0.1:8765", "doorbell_poll_sec": 2}
@@ -554,7 +570,7 @@ in `SHADOW` mode, which records what it *would* have typed and types nothing:
 ```bash
 DOORBELL_MODE=LIVE python3 -m tabus.doorbell     # ring for real
 DOORBELL_MODE=SHADOW python3 -m tabus.doorbell   # record only; the default
-DOORBELL_POLL_SEC=2                              # poll interval, default 2 (or config.json)
+DOORBELL_POLL_SEC=2                              # poll interval, default 2 (or config.json from the release after 0.2.6)
 ```
 
 Stop it with the usual signal to that process; there is no daemon to ask.
