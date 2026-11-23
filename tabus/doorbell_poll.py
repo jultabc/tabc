@@ -356,9 +356,17 @@ def record_ring(recipient, high_id, unread, mode, outcome):
         return True
 
 
+def poll_interval() -> float:
+    """Seconds between doorbell rounds (DOORBELL_POLL_SEC, config.json, default — see paths)."""
+    try:
+        return paths.doorbell_poll_sec()
+    except paths.ConfigError as e:
+        sys.exit(f"doorbell: config error: {e}")  # one line, not a traceback
+
+
 def main():
     """Standalone run: observation only. Nothing is injected anywhere."""
-    interval = float(os.environ.get("DOORBELL_POLL_SEC", "2"))
+    interval = poll_interval()
     print(f"[doorbell] observation mode — store={os.path.abspath(TABC_DB)}", flush=True)
     print(f"[doorbell] ledger={os.path.abspath(LEDGER_DB)} interval={interval}s", flush=True)
     while True:

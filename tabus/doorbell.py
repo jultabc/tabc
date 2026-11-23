@@ -487,7 +487,7 @@ def _record_start(mode):
 
 def main():
     global _lock_fd
-    interval = float(os.environ.get("DOORBELL_POLL_SEC", "2"))
+    interval = doorbell_poll.poll_interval()
     mode = os.environ.get("DOORBELL_MODE", "SHADOW").strip().upper()
     if mode not in ("SHADOW", "LIVE"):
         print(f"  {_kst()} [doorbell] unknown mode: {mode} (SHADOW or LIVE) — not started", flush=True)

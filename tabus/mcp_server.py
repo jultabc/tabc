@@ -16,10 +16,11 @@ from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from . import nodekey
+from . import nodekey, paths
+from .reply_link import THREAD_PAGE_MAX
 
 NODE = os.environ.get("TABC_NODE", "").strip()
-BASE = os.environ.get("TABC_BUS_URL", "http://127.0.0.1:8765").rstrip("/")
+BASE = paths.bus_url().rstrip("/")  # TABC_BUS_URL, config.json, default; a broken config.json stops startup
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -45,10 +46,10 @@ def _request(method, path, payload=None, params=None, timeout=10):
                 or base.hostname not in ("localhost", "127.0.0.1", "::1")
                 or base.username is not None or base.password is not None
                 or base.path or base.query or base.fragment):
-            return _error("BAD_BASE", "TABC_BUS_URL must be a loopback HTTP(S) origin.")
+            return _error("BAD_BASE", "The bus URL (TABC_BUS_URL or config.json bus_url) must be a loopback HTTP(S) origin.")
         base.port  # Validate the port before signing.
     except ValueError:
-        return _error("BAD_BASE", "Invalid TABC_BUS_URL.")
+        return _error("BAD_BASE", "Invalid bus URL (TABC_BUS_URL or config.json bus_url).")
     if not NODE:
         return _error("NO_NODE", "Set TABC_NODE to a registered normal node.")
     try:
@@ -287,7 +288,7 @@ def tabc_thread(message_id: str, limit: int = 50, after: str | None = None) -> d
     here, before tabd is called. tabd refuses an after that is not a row of this
     thread with THREAD_PAGE_INVALID.
     """
-    params = {"node": NODE, "id": message_id, "limit": _limit(limit, 500)}
+    params = {"node": NODE, "id": message_id, "limit": _limit(limit, THREAD_PAGE_MAX)}
     if after is not None:
         params["after"] = _id(after)
     return _request("GET", "/thread", params=params)

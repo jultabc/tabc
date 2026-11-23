@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tabus import nodekey, paths  # noqa: E402
 
-BASE = os.environ.get("TABC_BUS_URL", "http://127.0.0.1:8765")
+BASE = paths.bus_url()
 # 🔴 The dashboard authenticates like any client: it signs each (read-only) request
 #    with its own node key. Register this node once so tabd holds its pubkey. There is
 #    no shared token any more — and a signature transmits no secret to leak into the HTML.
