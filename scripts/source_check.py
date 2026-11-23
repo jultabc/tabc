@@ -40,18 +40,38 @@ import re, sys, pathlib
 #    names, numbers and paths as a comment does. A rename that reached the code
 #    and not the guide is exactly what this missed.
 SUFFIX = (".py", ".md", ".html")
+
+# Report shape. One place each, so the report cannot disagree with itself.
+EXCERPT_CHARS = 52          # characters of a finding printed on its line
+ROWS_SHOWN = 6              # findings printed per kind; the rest are counted
+ATTRIBUTION_MAX_CHARS = 60  # a credit is short; a longer parenthesis is prose
+REVIEW_ID_HEX = 8           # the leading characters of a message or commit id
+# Characters of context kept (before, after) a match, so the excerpt shows what it
+# is attached to: an issue number needs the words before it, a path the folder
+# names around it, a figure the noun after it.
+CONTEXT = {"issue": (28, 14), "path": (22, 14), "figure": (24, 10)}
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv"}
 
 # A parenthesis carrying a date or an issue number: where an attribution sits.
-ATTRIBUTION = re.compile(r"\(([^()\n]{0,60})\)")
+ATTRIBUTION = re.compile(r"\(([^()\n]{0,%d})\)" % ATTRIBUTION_MAX_CHARS)
 STAMP = re.compile(r"20\d\d-\d\d-\d\d|#\d{1,4}\b")
 
 # Names, checked only inside an attribution. Korean entries are guarded on both
 # sides so a name is not matched inside a longer word.
 NAMES = re.compile(
-    '(?<![\uac00-\ud7a3])(\ub2e8|\uc904|\ucfe8|\uc7ad|\uc6b0|\ud6c4|\uc5d0\uadf8|\uc2ec\ud574)(?![\uac00-\ud7a3])'
-    r"|(?<![A-Za-z])(cole|dora|wes|kai|ivy|nova|ezra|eli|zoe)(?![A-Za-z])"
+    '(?<![\uac00-\ud7a3])(\ub2e8|\uc904|\ucfe8|\uc7ad|\uc6b0|\ud6c4|\uc5d0\uadf8|\uc2ec\ud574|\ucf54\ucf54|\uc9c0\uc18c)(?![\uac00-\ud7a3])'
+    r"|(?<![A-Za-z])(cole|dora|wes|kai|ivy|nova|ezra|eli|zoe|remy|dev|milo)(?![A-Za-z])"
 )
+
+# A review reference: a name followed by the start of a message or commit id,
+# as in "(<name> 9d72d474)". The id alone is common in code; the name is what
+# makes it ours.
+REVIEW_ID = re.compile(r"\b[0-9a-f]{%d}\b" % REVIEW_ID_HEX)
+# A parenthesis that is nothing but names, as in "(<name>)" or "(<name>, <name> M3)":
+# a credit with no date and no number. Matched whole, so a sentence in parentheses
+# that merely contains a name does not count.
+_NAME_ALT = NAMES.pattern
+ONLY_NAMES = re.compile(r"\s*(?:%s)(?:\s*[,·]\s*(?:%s))*(?:\s+[A-Z]{1,2}\d+)?\s*" % (_NAME_ALT, _NAME_ALT))
 
 # An internal issue number. `#s2` and `#fff` do not match: those are an anchor
 # and a colour, and both carry a letter.
@@ -120,27 +140,31 @@ def targets(argv):
             yield f
 
 
+def excerpt(s, m, kind):
+    before, after = CONTEXT[kind]
+    return re.sub(r"\s+", " ", s[max(0, m.start() - before) : m.end() + after]).strip()[:EXCERPT_CHARS]
+
+
 def scan(path):
     """Findings in one file as (kind, line, excerpt)."""
     try:
         s = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
+    except (OSError, UnicodeDecodeError) as e:
+        # Not read is not clean: report it, so 0 findings never covers a file nobody saw.
+        return [("unreadable", 0, type(e).__name__)]
     out = []
     for m in ATTRIBUTION.finditer(s):
         inner = m.group(1)
-        if not STAMP.search(inner):
+        if not (STAMP.search(inner) or REVIEW_ID.search(inner) or ONLY_NAMES.fullmatch(inner)):
             continue
         if NAMES.search(inner):
-            out.append(("name", s[: m.start()].count("\n") + 1, m.group(0)[:52]))
+            out.append(("name", s[: m.start()].count("\n") + 1, m.group(0)[:EXCERPT_CHARS]))
     for m in ISSUE.finditer(s):
         line = s[: m.start()].count("\n") + 1
-        around = re.sub(r"\s+", " ", s[max(0, m.start() - 28) : m.end() + 14]).strip()
-        out.append(("issue", line, around[:52]))
+        out.append(("issue", line, excerpt(s, m, "issue")))
     for m in LOCAL_PATH.finditer(s):
         line = s[: m.start()].count("\n") + 1
-        around = re.sub(r"\s+", " ", s[max(0, m.start() - 22) : m.end() + 14]).strip()
-        out.append(("path", line, around[:52]))
+        out.append(("path", line, excerpt(s, m, "path")))
     # 🔴 Counted figures are read in source and not in prose — for now, and the
     #    reason matters more than the rule.
     #
@@ -157,8 +181,7 @@ def scan(path):
     if path.suffix.lower() != ".html":
         for m in FIGURE.finditer(s):
             line = s[: m.start()].count("\n") + 1
-            around = re.sub(r"\s+", " ", s[max(0, m.start() - 24) : m.end() + 10]).strip()
-            out.append(("figure", line, around[:52]))
+            out.append(("figure", line, excerpt(s, m, "figure")))
     return out
 
 
@@ -167,6 +190,7 @@ LABEL = {
     "issue": "internal issue number — meaningless outside this repository",
     "figure": "a counted figure — state how to count it instead",
     "path": "a path under a home directory — nobody else has it",
+    "unreadable": "a file that could not be read — not checked",
 }
 
 found = {}
@@ -176,17 +200,17 @@ for f in sorted(targets(sys.argv[1:])):
     for kind, line, text in scan(f):
         found.setdefault(kind, []).append((f, line, text))
 
-for kind in ("name", "issue", "figure", "path"):
+for kind in ("name", "issue", "figure", "path", "unreadable"):
     rows = found.get(kind, [])
     head = "  OK      " if not rows else "  FOUND   "
     print(f"{head}{LABEL[kind]}: {len(rows)}")
-    for f, line, text in rows[:6]:
+    for f, line, text in rows[:ROWS_SHOWN]:
         print(f"          {f}:{line}  {text}")
-    if len(rows) > 6:
-        print(f"          … and {len(rows) - 6} more")
+    if len(rows) > ROWS_SHOWN:
+        print(f"          … and {len(rows) - ROWS_SHOWN} more")
 
 total = sum(len(v) for v in found.values())
-print(f"\n  {files} files read, {total} findings")
+print(f"\n  {files} files checked, {total} findings")
 if total:
     print("  🔴 A name list written by hand omits somebody. Treat a zero here as")
     print("     'nothing matched the patterns', not as 'nothing is left'.")
