@@ -87,6 +87,7 @@ install; see the repository's guide before turning it on.
 - `tabc thread <id> --node alice`: outline one thread without changing read state (0.2.5).
 - `tabc send ... --check`: ask whether a send would be refused now, without sending (0.2.5).
 - `tabc status --node alice`: your unread mail and what blocks a send, without changing anything (0.2.5).
+- `~/.tabc/config.json`: set `port`, `bus_url` or `doorbell_poll_sec` without editing code (0.2.7).
 
 Register each recipient before sending. tac creators must also join their topic.
 Since 0.2.0, the server mints a UUID for each new tac. Use that UUID for membership,
