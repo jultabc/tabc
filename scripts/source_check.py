@@ -33,13 +33,15 @@ already flags, not the primary net. Adding a name here is cheap; relying on
 this file to be complete is not safe.
 """
 
-import re, sys, pathlib
+import pathlib
+import re
+import subprocess
+import sys
 
 # 🔴 HTML is read too. Leaving it out was not a decision — the first version
 #    thought of this as a source check, and a published page carries the same
 #    names, numbers and paths as a comment does. A rename that reached the code
 #    and not the guide is exactly what this missed.
-SUFFIX = (".py", ".md", ".html")
 
 # Report shape. One place each, so the report cannot disagree with itself.
 EXCERPT_CHARS = 52          # characters of a finding printed on its line
@@ -49,8 +51,9 @@ REVIEW_ID_HEX = 8           # the leading characters of a message or commit id
 # Characters of context kept (before, after) a match, so the excerpt shows what it
 # is attached to: an issue number needs the words before it, a path the folder
 # names around it, a figure the noun after it.
-CONTEXT = {"issue": (28, 14), "path": (22, 14), "figure": (24, 10)}
+CONTEXT = {"issue": (28, 14), "path": (22, 14), "figure": (24, 10), "credit": (12, 10)}
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv"}
+BINARY_SUFFIX = (".jar", ".gif", ".png", ".jpg", ".jpeg", ".ico", ".webp", ".pdf", ".zip", ".gz", ".whl")
 
 # A parenthesis carrying a date or an issue number: where an attribution sits.
 ATTRIBUTION = re.compile(r"\(([^()\n]{0,%d})\)" % ATTRIBUTION_MAX_CHARS)
@@ -58,9 +61,14 @@ STAMP = re.compile(r"20\d\d-\d\d-\d\d|#\d{1,4}\b")
 
 # Names, checked only inside an attribution. Korean entries are guarded on both
 # sides so a name is not matched inside a longer word.
+# One list of English names; both the attribution check and the line check build
+# their pattern from it, so the two cannot disagree about who is a name.
+ENGLISH_NAMES = ("cole", "dora", "wes", "kai", "ivy", "nova", "ezra", "eli", "zoe", "remy", "dev", "milo", "neil")
+_ENGLISH_NAMES = r"(?<![A-Za-z])(?:%s)(?![A-Za-z])" % "|".join(ENGLISH_NAMES)
+
 NAMES = re.compile(
     '(?<![\uac00-\ud7a3])(\ub2e8|\uc904|\ucfe8|\uc7ad|\uc6b0|\ud6c4|\uc5d0\uadf8|\uc2ec\ud574|\ucf54\ucf54|\uc9c0\uc18c)(?![\uac00-\ud7a3])'
-    r"|(?<![A-Za-z])(cole|dora|wes|kai|ivy|nova|ezra|eli|zoe|remy|dev|milo)(?![A-Za-z])"
+    r"|" + _ENGLISH_NAMES
 )
 
 # A review reference: a name followed by the start of a message or commit id,
@@ -72,6 +80,15 @@ REVIEW_ID = re.compile(r"\b[0-9a-f]{%d}\b" % REVIEW_ID_HEX)
 # that merely contains a name does not count.
 _NAME_ALT = NAMES.pattern
 ONLY_NAMES = re.compile(r"\s*(?:%s)(?:\s*[,·]\s*(?:%s))*(?:\s+[A-Z]{1,2}\d+)?\s*" % (_NAME_ALT, _NAME_ALT))
+
+# A credit anywhere on a line, not only in parentheses: a name followed by the
+# start of a review id ("# <name> 9d72d474" at the end of a code line), or a name
+# followed by the verb of a credit ("<name> found", "<name> review"). The first
+# version looked only inside parentheses and missed both.
+LINE_CREDIT = re.compile(
+    _ENGLISH_NAMES + r"(?:\s+[0-9a-f]{%d}\b|\s+(?:found|review(?:ed)?|reproduced|spotted|noticed|caught|CR)\b|\s+and\s+"
+    % REVIEW_ID_HEX + _ENGLISH_NAMES + r"\s+(?:found|reproduced|sent)\b)"
+)
 
 # An internal issue number. `#s2` and `#fff` do not match: those are an anchor
 # and a colour, and both carry a letter.
@@ -126,18 +143,41 @@ LOCAL_PATH = re.compile(
 )
 
 
+class TargetError(RuntimeError):
+    """The list of files to check could not be made. Nothing was checked."""
+
+
+def is_checked(f):
+    return f.is_file() and not f.name.lower().endswith(BINARY_SUFFIX) and not (SKIP_DIRS & set(f.parts))
+
+
 def targets(argv):
+    """Files to check. Paths given: every non-binary file under them, whatever its
+    name (LICENSE has no suffix). No paths: every file git tracks, except binaries.
+
+    🔴 If git cannot list the files, that is a failure, not a reason to walk by
+    suffix: a fallback that skipped LICENSE reported 0 findings for a credit in it.
+    Outside a git checkout, pass the paths to check."""
     if argv:
         for a in argv:
             p = pathlib.Path(a)
             if p.is_dir():
-                yield from (f for f in p.rglob("*") if f.suffix in SUFFIX)
-            elif p.suffix in SUFFIX:
+                yield from sorted(f for f in p.rglob("*") if is_checked(f))
+            elif p.is_file():
                 yield p
+            else:
+                raise TargetError(f"no such file or directory: {a}")
         return
-    for f in pathlib.Path(".").rglob("*"):
-        if f.suffix in SUFFIX and not (SKIP_DIRS & set(f.parts)):
-            yield f
+    try:
+        r = subprocess.run(["git", "ls-files", "-z"], capture_output=True)
+    except OSError as e:
+        raise TargetError(f"git ls-files could not run ({e}); pass the paths to check") from None
+    if r.returncode != 0:
+        msg = r.stderr.decode("utf-8", "replace").strip()[:EXCERPT_CHARS]
+        raise TargetError(f"git ls-files exited {r.returncode} ({msg}); pass the paths to check")
+    for name in r.stdout.decode("utf-8", "surrogateescape").split("\0"):
+        if name and not name.lower().endswith(BINARY_SUFFIX):
+            yield pathlib.Path(name)
 
 
 def excerpt(s, m, kind):
@@ -159,6 +199,8 @@ def scan(path):
             continue
         if NAMES.search(inner):
             out.append(("name", s[: m.start()].count("\n") + 1, m.group(0)[:EXCERPT_CHARS]))
+    for m in LINE_CREDIT.finditer(s):
+        out.append(("name", s[: m.start()].count("\n") + 1, excerpt(s, m, "credit")))
     for m in ISSUE.finditer(s):
         line = s[: m.start()].count("\n") + 1
         out.append(("issue", line, excerpt(s, m, "issue")))
@@ -195,7 +237,12 @@ LABEL = {
 
 found = {}
 files = 0
-for f in sorted(targets(sys.argv[1:])):
+try:
+    chosen = list(targets(sys.argv[1:]))
+except TargetError as e:
+    print(f"  🔴 not checked: {e}")
+    sys.exit(2)
+for f in sorted(chosen):
     files += 1
     for kind, line, text in scan(f):
         found.setdefault(kind, []).append((f, line, text))

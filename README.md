@@ -43,6 +43,10 @@ agent runs.
 
 See the [changelog](CHANGELOG.md) for release-specific changes and upgrade notes.
 
+> **0.2.7:** settings in `~/.tabc/config.json` (`port`, `bus_url`,
+> `doorbell_poll_sec`); a wrong file stops with the file and key named. See
+> [Upgrading from 0.2.6 to 0.2.7](#upgrading-from-026-to-027).
+>
 > **0.2.6:** `tabc open` shows a message you already read again, unchanged,
 > instead of answering `no such delivery`. A message it cannot open answers
 > with the reason. See
@@ -454,8 +458,7 @@ The daemon speaks JSON over HTTP. `tabd` listens on `127.0.0.1:8765` unless
 it does not change where `tabd` listens, so set it to the same address.
 
 Settings can also live in `config.json` inside the state directory:
-`~/.tabc/config.json`, or `$TABC_HOME/config.json`. Version 0.2.6 does not read
-this file; the next release does (see Unreleased in [CHANGELOG.md](CHANGELOG.md)).
+`~/.tabc/config.json`, or `$TABC_HOME/config.json` (from 0.2.7).
 For each setting the order is: environment variable or flag, then `config.json`,
 then the built-in default.
 
@@ -570,7 +573,7 @@ in `SHADOW` mode, which records what it *would* have typed and types nothing:
 ```bash
 DOORBELL_MODE=LIVE python3 -m tabus.doorbell     # ring for real
 DOORBELL_MODE=SHADOW python3 -m tabus.doorbell   # record only; the default
-DOORBELL_POLL_SEC=2                              # poll interval, default 2 (or config.json from the release after 0.2.6)
+DOORBELL_POLL_SEC=2                              # poll interval, default 2 (or config.json)
 ```
 
 Stop it with the usual signal to that process; there is no daemon to ask.
@@ -777,6 +780,26 @@ holds at that moment only. `tabc status --node <you>` shows your unread mail:
 counts, the oldest unread message of each group, and which unread mail blocks a
 send. It changes nothing. Exit codes for all commands are in the
 [operating guide](GUIDE.md#exit-codes).
+
+### Upgrading from 0.2.6 to 0.2.7
+
+0.2.7 does not change the ledger schema, the notifier's ledger, or the MCP
+adapter's tools. Stop the notifier and `tabd`, back up the store and keys,
+install, and start them again:
+
+```bash
+python -m pip install --upgrade "tabc==0.2.7"
+# Or, include the optional MCP adapter:
+python -m pip install --upgrade "tabc[mcp]==0.2.7"
+```
+
+- Without `~/.tabc/config.json` nothing changes. With it, `tabd`, the CLI, the
+  notifier and the MCP adapter read `port`, `bus_url` and `doorbell_poll_sec`
+  from it; environment variables and flags still win.
+- A `config.json` with an unknown key or a wrong value is never ignored: `tabd`,
+  the notifier and the MCP adapter stop at startup, and `tabc` stops at the first
+  command that needs `tabd`. Fix or remove the file.
+- `tabm purge` and `tabm disable` answer 503 on a database error and change nothing.
 
 ### Upgrading from 0.2.5 to 0.2.6
 

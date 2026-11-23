@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.7 — 2026-11-23
 
 ### Added
 
@@ -9,10 +9,27 @@
   still win; without the file nothing changes. An unknown key or a wrong value
   stops the command that needs it and names the file and key.
 
+### Fixed
+
+- `tabm purge` (POST /remove) on a database error other than a missing
+  open-records table rolls back and answers 503 `database error (...); nothing
+  was removed`, instead of removing the node and leaving its open records for
+  the next owner of the name. `tabm disable` (the same endpoint) answers 503
+  on a database error too, instead of dropping the connection.
+- `scripts/link_check.py` counts a file it cannot read as broken (`--strict`
+  exits 1) instead of reporting 0 broken.
+- `scripts/security_snapshot.py` lists files it cannot read
+  (`unreadable_files`) and sets `scan_error` when `git ls-files` fails, so
+  0 hits is not read as clean.
+
 ### Changed
 
-- The bus port and URL, the thread page limits and the doorbell interval are
-  defined once each instead of in two to four files. Values are unchanged.
+- The bus port, host and URL, the thread page limits and the doorbell interval
+  are defined once each instead of in two to four files. Values are unchanged.
+- README: start `tabd` before `tabc register`, what the register output means,
+  and what to do when the port is taken.
+- Code comments no longer carry internal names or document references;
+  `scripts/source_check.py` catches them.
 
 ## 0.2.6 — 2026-11-22
 
