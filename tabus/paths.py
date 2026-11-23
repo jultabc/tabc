@@ -44,8 +44,9 @@ DEFAULT_DIRNAME = ".tabc"
 # Built-in defaults. A person changes them in config.json (see settings below),
 # not here. tabd, the CLI, the MCP server, the dashboard and the doorbell read
 # them only through this module.
+DEFAULT_BUS_HOST = "127.0.0.1"  # loopback: tabd is reachable from this machine only, unless --bind says otherwise
 DEFAULT_BUS_PORT = 8765
-DEFAULT_BUS_URL = f"http://127.0.0.1:{DEFAULT_BUS_PORT}"
+DEFAULT_BUS_URL = f"http://{DEFAULT_BUS_HOST}:{DEFAULT_BUS_PORT}"
 DEFAULT_DOORBELL_POLL_SEC = 2.0
 MAX_DOORBELL_POLL_SEC = 86400.0  # one day; time.sleep overflows far above this
 CONFIG_NAME = "config.json"
@@ -201,7 +202,7 @@ def bus_port() -> int:
 
 def bus_url() -> str:
     """Where clients reach tabd. Order: TABC_BUS_URL, config.json bus_url,
-    then 127.0.0.1 on bus_port() — so a port set in config.json moves tabd and
+    then DEFAULT_BUS_HOST on bus_port() — so a port set in config.json moves tabd and
     its local clients together.
 
     🔴 config.json is checked first even when TABC_BUS_URL is set: a broken file
@@ -213,7 +214,7 @@ def bus_url() -> str:
         return env.rstrip("/")
     if "bus_url" in cfg:
         return cfg["bus_url"].rstrip("/")
-    return f"http://127.0.0.1:{cfg.get('port', DEFAULT_BUS_PORT)}"
+    return f"http://{DEFAULT_BUS_HOST}:{cfg.get('port', DEFAULT_BUS_PORT)}"
 
 
 def doorbell_poll_sec() -> float:

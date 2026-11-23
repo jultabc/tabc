@@ -9,6 +9,7 @@ import subprocess
 
 GIT_LIST_TIMEOUT_SEC = 10  # git ls-files on a large tree finishes well inside this
 HITS_DETAIL_MAX = 20  # hits listed in full; the count covers all of them
+STDERR_EXCERPT_MAX = 200  # characters of git's error kept in scan_error
 
 
 def main():
@@ -39,7 +40,7 @@ def main():
     else:
         if listed.returncode != 0:
             # Not a repository, or git refused: nothing was listed, so nothing was scanned.
-            scan_error = f"git ls-files exited {listed.returncode}: {listed.stderr.strip()[:200]}"
+            scan_error = f"git ls-files exited {listed.returncode}: {listed.stderr.strip()[:STDERR_EXCERPT_MAX]}"
         else:
             tracked = listed.stdout.splitlines()
 
