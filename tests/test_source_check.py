@@ -7,6 +7,7 @@ name. And the package itself must have none, so a credit cannot come back.
 """
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -57,8 +58,19 @@ class SourceCheck(unittest.TestCase):
         self.assertIn("FOUND   a file that could not be read", r.stdout)
         self.assertEqual(r.returncode, 1)
 
-    def test_package_has_no_credits(self):
-        r = run("tabus")
+    def test_report_limits_are_named_once(self):
+        # Excerpt length, rows shown and context widths live in named constants;
+        # a literal slice or offset would be a second copy that drifts.
+        with open(TOOL, encoding="utf-8") as f:
+            code = [l for l in f if not l.lstrip().startswith("#")]
+        text = "".join(code)
+        self.assertEqual(re.findall(r"\[:\d+\]", text), [])
+        self.assertEqual(re.findall(r"m\.(?:start|end)\(\)\s*[-+]\s*\d", text), [])
+        self.assertEqual(re.findall(r"len\(rows\)\s*[-+>]=?\s*\d", text), [])
+
+    def test_published_code_has_no_credits(self):
+        # Everything in the public repository that holds code, tests included.
+        r = run("tabus", "scripts", "clients", "tests")
         self.assertEqual(r.returncode, 0, r.stdout)
 
 
