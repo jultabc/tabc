@@ -56,7 +56,10 @@ def check(paths):
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
-        except OSError:
+        except OSError as e:
+            # A file we could not read was not checked. Count it as broken so the
+            # report does not say "0 broken" about links nobody looked at.
+            broken.append((path, f"<unreadable: {e.strerror or e}>"))
             continue
         for url in HTML_LINK.findall(text) + MD_LINK.findall(text):
             if is_external(url):

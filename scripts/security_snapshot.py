@@ -7,6 +7,9 @@ import json
 import glob
 import subprocess
 
+GIT_LIST_TIMEOUT_SEC = 10  # git ls-files on a large tree finishes well inside this
+HITS_DETAIL_MAX = 20  # hits listed in full; the count covers all of them
+
 
 def main():
     root = os.path.dirname(os.path.abspath(__file__))
@@ -25,13 +28,20 @@ def main():
             secret_files.append(f)
 
     # 2) Scan tracked repository files for literal database credentials.
+    tracked, scan_error = [], None
     try:
-        tracked = subprocess.run(
+        listed = subprocess.run(
             ["git", "ls-files"], cwd=scan_root,
-            capture_output=True, text=True, timeout=10
-        ).stdout.splitlines()
-    except Exception:
-        tracked = []
+            capture_output=True, text=True, timeout=GIT_LIST_TIMEOUT_SEC
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        scan_error = f"git ls-files failed: {e}"
+    else:
+        if listed.returncode != 0:
+            # Not a repository, or git refused: nothing was listed, so nothing was scanned.
+            scan_error = f"git ls-files exited {listed.returncode}: {listed.stderr.strip()[:200]}"
+        else:
+            tracked = listed.stdout.splitlines()
 
     import re
     cred_pattern = re.compile(
@@ -39,6 +49,7 @@ def main():
         re.IGNORECASE,
     )
     hits = []
+    unreadable = []
     for f in tracked:
         fp = os.path.join(scan_root, f)
         if not os.path.exists(fp):
@@ -47,8 +58,10 @@ def main():
             content = open(fp, encoding="utf-8", errors="ignore").read()
             for m in cred_pattern.finditer(content):
                 hits.append({"file": f, "line": content[:m.start()].count("\n") + 1})
-        except Exception:
-            pass
+        except OSError as e:
+            # Not read = not scanned. Listed in the output, so "0 hits" is not
+            # claimed for a file nobody looked at.
+            unreadable.append({"file": f, "error": e.strerror or str(e)})
 
     # 3) Check for environment files.
     env_files = []
@@ -63,7 +76,11 @@ def main():
         "tracked_cred_literal_hits": len(hits),
         "hits_by_dir": {},
         "env_files": env_files,
-        "hits_detail": hits[:20],
+        "hits_detail": hits[:HITS_DETAIL_MAX],
+        "unreadable_files": unreadable,
+        # Set when the file list could not be read: then nothing was scanned, and
+        # tracked_cred_literal_hits = 0 means "not looked", not "clean".
+        "scan_error": scan_error,
     }
     for h in hits:
         d = h["file"].split("/")[0] if "/" in h["file"] else "root"
