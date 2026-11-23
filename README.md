@@ -97,13 +97,60 @@ closed window. A message is delivered only when the receiver pulls it.
 
 ```mermaid
 flowchart LR
-    A["alice (tabc)"] -->|"send, signed"| D["tabd — 127.0.0.1:8765"]
-    D ==>|"1. store first"| S[("SQLite: messages, routes, audit")]
-    DB["doorbell poller"] -->|watches| S
-    DB -.->|"2. notify (best-effort)"| B["bob (tabc)"]
+    A["alice (tabc or tabc-mcp)"] -->|"send, signed"| D["tabd — 127.0.0.1:8765"]
+    D ==>|"1. store first"| S[("~/.tabc/tabus.db: nodes, messages, deliveries, routes, audit")]
+    DB["tabus.doorbell"] -->|"reads only"| S
+    DB -->|"records rings"| R[("~/.tabc/data/doorbell_ring.db")]
+    DB -.->|"2. notify (best-effort)"| B["bob (tabc or tabc-mcp)"]
     B ==>|"pull, guarantees delivery"| D
-    D -->|reads| S
 ```
+
+### What runs
+
+| Process | Started by | Runs | Writes |
+|---|---|---|---|
+| `tabd` | you, once per installation | until stopped | `tabus.db`; the only writer while it runs, apart from `tabm rotate-key` |
+| `python -m tabus.doorbell` | you, once per state directory | until stopped; one round every 2 s | its own `data/doorbell_ring.db`; opens `tabus.db` read-only |
+| `tabc` | each agent | one command, then exits | messages and states only through `tabd`; locally, its node key at registration and `user_email` |
+| `tabm` | the operator | one command, then exits | through `tabd`, except `tabm rotate-key`, which writes `tabus.db` directly on the local machine |
+| `tabc-mcp` | an MCP host, per agent | while the host keeps it open | nothing directly; calls `tabd` like `tabc` |
+
+`tabc` and `tabc-mcp` sign each request with the node key in the state
+directory. `tabd` checks the signature against the registered public key.
+Files under `~/.tabc` are listed in [Where state lives](#where-state-lives).
+
+### Where the code is
+
+All code is in the `tabus` package.
+
+| File | Role |
+|---|---|
+| `tabus/bus.py` | every read and write of `tabus.db`: delivery states, nodes, keys, tacs, unread counts |
+| `tabus/daemon.py` | `tabd`: HTTP routes, signature check, calls into `bus.py` |
+| `tabus/cli.py` | `tabc`: one function per command, each a signed HTTP call to `tabd` |
+| `tabus/doorbell.py`, `tabus/doorbell_poll.py` | the notifier: reads unread state, rings routes, records rings |
+| `tabus/admin.py` | `tabm`: operator commands; reuses the `cli.py` handlers |
+| `tabus/mcp_server.py` | the optional MCP adapter |
+| `tabus/codex_queue.py` | notifications to an explicit Codex thread, and their local receipts |
+| `tabus/reply_link.py`, `tabus/send_refusal.py`, `tabus/tac_store.py` | reply visibility, send refusals, tac storage |
+| `tabus/route_capture.py`, `tabus/terminal_frontend.py` | terminal routes the doorbell rings |
+| `tabus/nodekey.py`, `tabus/paths.py` | node keys and the state directory |
+| other `tabus/*.py` | smaller helpers: tac lookup and migration, refusal wording, language, compatibility aliases |
+
+A change to delivery behaviour usually touches `bus.py` and `daemon.py`
+together. `tests/test_acceptance.py` starts a real `tabd` on a temporary
+database and runs register, send, pull, open, READ, and reopen.
+
+### Stopping
+
+- `tabd`: Ctrl+C in its terminal, or `kill <pid>` for the process you started.
+  It has no signal handler; the process ends at once, and SQLite keeps each
+  stored message whole.
+- The doorbell: Ctrl+C or `kill <pid>`. It finishes the current round and exits 0.
+- Stop the doorbell before `tabd`. Before an upgrade or a backup, confirm the
+  ledger WAL is absent or empty (see the upgrade notes below).
+- Stopping either loses no stored message. While `tabd` is down, `send` and
+  `pull` fail with a connection error; send again after it is back.
 
 ---
 
