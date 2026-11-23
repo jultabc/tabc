@@ -38,6 +38,12 @@ import sys
 #    and putting keys under .tabus while the running install used .tabc.
 DEFAULT_DIRNAME = ".tabc"
 
+# Where tabd listens unless told otherwise, and where every client looks for it
+# unless TABC_BUS_URL says otherwise. One value here; tabd, the CLI, the MCP
+# server and the dashboard read it from this module.
+DEFAULT_BUS_PORT = 8765
+DEFAULT_BUS_URL = f"http://127.0.0.1:{DEFAULT_BUS_PORT}"
+
 
 def home() -> str:
     """The state directory for this installation. Always 0700 by the time it returns.

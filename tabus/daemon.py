@@ -33,7 +33,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import reply_link
+from . import paths, reply_link
 from . import nodekey  # base58 signature decoding, for verifying /send
 from .send_refusal import declared_length, request_length_refusal
 from . import bus as tabus  # the store; kept under its old name so call sites read the same
@@ -1123,7 +1123,7 @@ def main():
         action="version",
         version=f"tabd (tabus) {tabus.__version__}\nprotocol {tabus.PROTOCOL_VERSION}",
     )
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--port", type=int, default=paths.DEFAULT_BUS_PORT)
     ap.add_argument(
         "--bind",
         default="127.0.0.1",

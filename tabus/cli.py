@@ -32,7 +32,7 @@ import datetime
 import json
 import os
 
-from . import paths, route_capture
+from . import paths, reply_link, route_capture
 import sys
 import time
 import urllib.error
@@ -43,7 +43,7 @@ import uuid
 # 🔴 nodekey is imported lazily so local-only commands such as --help do not load
 #    cryptography. Every HTTP request is still signed inside call().
 
-BASE = os.environ.get("TABC_BUS_URL", "http://127.0.0.1:8765")
+BASE = os.environ.get("TABC_BUS_URL", paths.DEFAULT_BUS_URL)
 
 # 🔴 How much of a message id the listings print. One name, because the two
 #    listings must agree: a reader who learns the shape from one and pastes into
@@ -689,7 +689,7 @@ def fn_status(a):
         print(line)
 
 
-THREAD_CLI_LIMIT = 100
+THREAD_CLI_LIMIT = reply_link.THREAD_PAGE_DEFAULT  # the server page size and limits live in reply_link
 
 
 def fn_thread(a):
@@ -1557,7 +1557,7 @@ COMMANDS = {
         "Opens and marks nothing. Exit 0 shown, 1 query failed, 2 refused",
         [
             (("--node",), dict(default=None, help="acting node; falls back to TABC_NODE")),
-            (("--limit",), dict(type=int, default=THREAD_CLI_LIMIT, help=f"rows per page, 1 to 500 (default {THREAD_CLI_LIMIT})")),
+            (("--limit",), dict(type=int, default=THREAD_CLI_LIMIT, help=f"rows per page, 1 to {reply_link.THREAD_PAGE_MAX} (default {THREAD_CLI_LIMIT})")),
             (("--after",), dict(default=None, help="continue after this id: the next_after the previous page printed")),
             (("id",), dict(help="any message in the thread: full id or at least its first 8 characters")),
         ],

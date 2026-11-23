@@ -356,9 +356,17 @@ def record_ring(recipient, high_id, unread, mode, outcome):
         return True
 
 
+POLL_SEC_DEFAULT = "2"  # seconds between rounds unless DOORBELL_POLL_SEC says otherwise
+
+
+def poll_interval() -> float:
+    """Seconds between doorbell rounds. doorbell.py and this module both read it here."""
+    return float(os.environ.get("DOORBELL_POLL_SEC", POLL_SEC_DEFAULT))
+
+
 def main():
     """Standalone run: observation only. Nothing is injected anywhere."""
-    interval = float(os.environ.get("DOORBELL_POLL_SEC", "2"))
+    interval = poll_interval()
     print(f"[doorbell] observation mode — store={os.path.abspath(TABC_DB)}", flush=True)
     print(f"[doorbell] ledger={os.path.abspath(LEDGER_DB)} interval={interval}s", flush=True)
     while True:
