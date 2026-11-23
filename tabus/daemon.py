@@ -28,6 +28,7 @@ import json
 from http import HTTPStatus
 import os
 import socket
+import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
@@ -958,12 +959,18 @@ class BusHandler(BaseHTTPRequestHandler):
             # Remove a node. Soft removal fully deactivates it; purge deletes outright
             # and is allowed only when the node has no history at all.
             # The `by` field lands in the removals audit: deletion needs a person and a log.
-            ok, msg = tabus.bus_remove(
-                con,
-                data.get("node", ""),
-                bool(data.get("purge")),
-                data.get("by"),
-            )
+            try:
+                ok, msg = tabus.bus_remove(
+                    con,
+                    data.get("node", ""),
+                    bool(data.get("purge")),
+                    data.get("by"),
+                )
+            except sqlite3.OperationalError as e:
+                # bus_remove rolled back before raising: say so, and answer instead of
+                # dropping the connection with no reply.
+                con.close()
+                return self._json(503, {"ok": False, "msg": f"database busy ({e}); nothing was removed"})
             con.close()
             return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
 

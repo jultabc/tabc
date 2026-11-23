@@ -2549,11 +2549,12 @@ def bus_remove(con, node_id, purge=False, by=None):
             try:
                 con.execute(f"DELETE FROM {_tbl} WHERE {_col}=?", (node_id,))
             except sqlite3.OperationalError as e:
-                # Only a ledger without that table (as in some tests) is harmless.
+                # Only a ledger without this very table (as in some tests) is harmless.
+                # Any other missing table (a trigger's, say) is not.
                 # Anything else (a locked database, say) would leave this node's
                 # open records for whoever registers the name next, so it stops
                 # the purge instead.
-                if "no such table" not in str(e):
+                if str(e) != f"no such table: {_tbl}":
                     con.rollback()  # nothing of this purge is kept
                     raise
         con.execute("DELETE FROM nodes WHERE node_id=?", (node_id,))

@@ -71,6 +71,12 @@ class SecuritySnapshot(unittest.TestCase):
         self.assertEqual([u["file"] for u in out["unreadable_files"]], ["conf.py"])
         self.assertIsNone(out["scan_error"])
 
+    def test_not_a_repository_is_not_clean(self):
+        with tempfile.TemporaryDirectory() as d:  # git ls-files exits 128 here
+            out = self.run_snapshot(d)
+        self.assertEqual(out["tracked_cred_literal_hits"], 0)
+        self.assertIn("git ls-files exited", out["scan_error"] or "")
+
     def test_missing_git_list_is_not_clean(self):
         with tempfile.TemporaryDirectory() as d:
             r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "security_snapshot.py"), d],
@@ -106,6 +112,30 @@ class PurgeStopsOnDatabaseError(unittest.TestCase):
         with self.assertRaises(sqlite3.OperationalError):
             tabus.bus_remove(Locked(con), "zed", purge=True)
         self.assertIsNotNone(con.execute("SELECT 1 FROM nodes WHERE node_id='zed'").fetchone())
+        con.close()
+
+    def test_another_missing_table_stops_the_purge(self):
+        con = tabus.connect()
+        con.executescript(tabus.SCHEMA)
+        con.commit()
+        tabus.bus_register(con, "xia", "generic")
+        con.commit()
+
+        class OtherTable:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def execute(self, sql, *a):
+                if sql.startswith("DELETE FROM mailbox_opens"):
+                    raise sqlite3.OperationalError("no such table: main.audit_missing")
+                return self.inner.execute(sql, *a)
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+        with self.assertRaises(sqlite3.OperationalError):
+            tabus.bus_remove(OtherTable(con), "xia", purge=True)
+        self.assertIsNotNone(con.execute("SELECT 1 FROM nodes WHERE node_id='xia'").fetchone())
         con.close()
 
     def test_missing_table_is_still_harmless(self):
