@@ -967,10 +967,12 @@ class BusHandler(BaseHTTPRequestHandler):
                     data.get("by"),
                 )
             except sqlite3.OperationalError as e:
-                # bus_remove rolled back before raising: say so, and answer instead of
+                # Nothing of the removal was committed: bus_remove rolls back on the
+                # purge path, and on an earlier statement the uncommitted work is
+                # discarded when the connection closes. Say so, and answer instead of
                 # dropping the connection with no reply.
                 con.close()
-                return self._json(503, {"ok": False, "msg": f"database busy ({e}); nothing was removed"})
+                return self._json(503, {"ok": False, "msg": f"database error ({e}); nothing was removed"})
             con.close()
             return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
 
@@ -1141,7 +1143,7 @@ def main():
     ap.add_argument("--port", type=int, default=_config_port())
     ap.add_argument(
         "--bind",
-        default="127.0.0.1",
+        default=paths.DEFAULT_BUS_HOST,
         help="LAN address, to accept remote clients. Every request is signed regardless.",
     )
     a = ap.parse_args()

@@ -68,7 +68,7 @@ try:
 finally:
     lock.execute("ROLLBACK")
     lock.close()
-check("busy database answers 503 with JSON", status == 503 and out.get("ok") is False, f"{status} {out}")
+check("locked database answers 503 with JSON", status == 503 and out.get("ok") is False, f"{status} {out}")
 check("the answer says nothing was removed", "nothing was removed" in out.get("msg", ""), out.get("msg", ""))
 c = sqlite3.connect(dbpath)
 check("node row still there", c.execute("SELECT 1 FROM nodes WHERE node_id='zed'").fetchone() is not None)

@@ -41,6 +41,15 @@ class SingleSource(unittest.TestCase):
         hits = [f"{p}:{n}" for p, n, line in code_lines() if re.search(r"\b%d\b" % paths.DEFAULT_BUS_PORT, line)]
         self.assertEqual(hits, ["tabus/paths.py:%d" % self._line_of("tabus/paths.py", "DEFAULT_BUS_PORT =")], hits)
 
+    def test_loopback_host_is_written_once(self):
+        # The default host tabd binds and clients dial, in the Python package and
+        # scripts. mcp_server's allow-list of loopback names is a different rule and
+        # is not counted. The demo shell script and the Java tests start their own
+        # servers on their own ports and are not counted either.
+        hits = [f"{p}:{n}" for p, n, line in code_lines()
+                if p.endswith(".py") and re.search(r"(?<![\d.])127\.0\.0\.1(?![\d.])", line) and "localhost" not in line]
+        self.assertEqual(hits, ["tabus/paths.py:%d" % self._line_of("tabus/paths.py", "DEFAULT_BUS_HOST =")], hits)
+
     def test_doorbell_interval_default_is_written_once(self):
         hits = [f"{p}:{n}" for p, n, line in code_lines() if reads_env("DOORBELL_POLL_SEC", line)]
         self.assertEqual(len(hits), 1, hits)
