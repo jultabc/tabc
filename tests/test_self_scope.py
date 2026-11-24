@@ -29,6 +29,14 @@ sys.path.insert(0, ROOT)
 from tabus import daemon as tabd  # noqa: E402
 from tabus import nodekey  # noqa: E402
 import tabus  # noqa: E402
+from tabus import bus as _bus  # noqa: E402
+
+# Presence normally asks the terminal app (osascript, up to 3 s) and reads the
+# real ~/.claude/sessions folder. A test must not reach either: both are outside
+# the temp home, and a slow terminal made /who outlast the client timeout on a
+# busy Mac, so the test failed now and then. Presence itself is not under test.
+_bus.mirror_iterm = lambda con: []
+_bus.mirror_claude_sessions = lambda con, skip=(): []
 
 fails = []
 
